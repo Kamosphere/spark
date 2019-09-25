@@ -378,9 +378,10 @@ abstract class Graph[VD: ClassTag, ED: ClassTag] protected () extends Serializab
     aggregateMessagesWithActiveSet(sendMsg, mergeMsg, tripletFields, None)
   }
 
-  def aggregateNothingWithActiveSet
-  (tripletFields: TripletFields,
-   activeSetOpt: Option[(VertexRDD[_], EdgeDirection)]): VertexRDD[VD]
+  def aggregateIntoGPUWithActiveSet[A: ClassTag]
+  (gpuBridgeFunc: (Array[VertexId], Array[Boolean], Array[VD]) => Array[A],
+   tripletFields: TripletFields,
+   activeSetOpt: Option[(VertexRDD[_], EdgeDirection)]): VertexRDD[A]
 
   /**
    * Aggregates values from the neighboring edges and vertices of each vertex. The user-supplied

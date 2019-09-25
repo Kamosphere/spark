@@ -70,11 +70,12 @@ object GraphXUtils {
       sendMsg, reduceFunc, TripletFields.All, activeSetOpt)
   }
 
-  def testForAgg[VD: ClassTag, ED: ClassTag]
+  def testForAgg[VD: ClassTag, ED: ClassTag, A: ClassTag]
   (g: Graph[VD, ED],
+   gpuBridgeFunc: (Array[VertexId], Array[Boolean], Array[VD]) => Array[A],
    activeSetOpt: Option[(VertexRDD[_], EdgeDirection)] = None):
-  VertexRDD[VD] = {
-    g.aggregateNothingWithActiveSet(
+  VertexRDD[A] = {
+    g.aggregateIntoGPUWithActiveSet(gpuBridgeFunc,
       TripletFields.All, activeSetOpt)
   }
 }

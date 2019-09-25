@@ -44,7 +44,7 @@ class GraphImpl[VD: ClassTag, ED: ClassTag] protected (
 
   /** Return an RDD that brings edges together with their source and destination vertices. */
   @transient override lazy val triplets: RDD[EdgeTriplet[VD, ED]] = {
-    replicatedVertexView.upgrade(vertices, true, true)
+    replicatedVertexView.upgrade(vertices, includeSrc = true, includeDst = true)
     replicatedVertexView.edges.partitionsRDD.mapPartitions(_.flatMap {
       case (pid, part) => part.tripletIterator()
     })
@@ -164,7 +164,7 @@ class GraphImpl[VD: ClassTag, ED: ClassTag] protected (
     val newVerts = vertices.mapVertexPartitions(_.filter(vpred))
     // Filter the triplets. We must always upgrade the triplet view fully because vpred always runs
     // on both src and dst vertices
-    replicatedVertexView.upgrade(vertices, true, true)
+    replicatedVertexView.upgrade(vertices, includeSrc = true, includeDst = true)
     val newEdges = replicatedVertexView.edges.filter(epred, vpred)
     new GraphImpl(newVerts, replicatedVertexView.withEdges(newEdges))
   }
@@ -255,9 +255,10 @@ class GraphImpl[VD: ClassTag, ED: ClassTag] protected (
     vertices.aggregateUsingIndex(preAgg, mergeMsg)
   }
 
-  override def aggregateNothingWithActiveSet
-  (tripletFields: TripletFields,
-   activeSetOpt: Option[(VertexRDD[_], EdgeDirection)]): VertexRDD[VD] = {
+  override def aggregateIntoGPUWithActiveSet[A: ClassTag]
+  (gpuBridgeFunc: (Array[VertexId], Array[Boolean], Array[VD]) => Array[A],
+   tripletFields: TripletFields,
+   activeSetOpt: Option[(VertexRDD[_], EdgeDirection)]): VertexRDD[A] = {
 
     vertices.cache()
     // For each vertex, replicate its attribute only to partitions where it is
@@ -274,37 +275,37 @@ class GraphImpl[VD: ClassTag, ED: ClassTag] protected (
     // Map and combine.
     val preAgg = view.edges.partitionsRDD.mapPartitions(_.flatMap {
       case (pid, edgePartition) =>
-        var iterResult : Iterator[(VertexId, VD)] = null
+        var iterResult : Iterator[(VertexId, A)] = null
         val startTime = System.nanoTime()
         // Choose scan method
         val activeFraction = edgePartition.numActives.getOrElse(0) / edgePartition.indexSize.toFloat
         activeDirectionOpt match {
           case Some(EdgeDirection.Both) =>
             if (activeFraction < 0.8) {
-              iterResult = edgePartition.aggregateIndexScan(tripletFields,
+              iterResult = edgePartition.aggregateIntoGPUIndexScan(gpuBridgeFunc, tripletFields,
                 EdgeActiveness.Both)
             } else {
-              iterResult = edgePartition.aggregateEdgeScan(tripletFields,
+              iterResult = edgePartition.aggregateIntoGPUEdgeScan(gpuBridgeFunc, tripletFields,
                 EdgeActiveness.Both)
             }
           case Some(EdgeDirection.Either) =>
             // TODO: Because we only have a clustered index on the source vertex ID, we can't filter
             // the index here. Instead we have to scan all edges and then do the filter.
-            iterResult = edgePartition.aggregateEdgeScan(tripletFields,
+            iterResult = edgePartition.aggregateIntoGPUEdgeScan(gpuBridgeFunc, tripletFields,
               EdgeActiveness.Either)
           case Some(EdgeDirection.Out) =>
             if (activeFraction < 0.8) {
-              iterResult = edgePartition.aggregateIndexScan(tripletFields,
+              iterResult = edgePartition.aggregateIntoGPUIndexScan(gpuBridgeFunc, tripletFields,
                 EdgeActiveness.SrcOnly)
             } else {
-              iterResult = edgePartition.aggregateEdgeScan(tripletFields,
+              iterResult = edgePartition.aggregateIntoGPUEdgeScan(gpuBridgeFunc, tripletFields,
                 EdgeActiveness.SrcOnly)
             }
           case Some(EdgeDirection.In) =>
-            iterResult = edgePartition.aggregateEdgeScan(tripletFields,
+            iterResult = edgePartition.aggregateIntoGPUEdgeScan(gpuBridgeFunc, tripletFields,
               EdgeActiveness.DstOnly)
           case _ => // None
-            iterResult = edgePartition.aggregateEdgeScan(tripletFields,
+            iterResult = edgePartition.aggregateIntoGPUEdgeScan(gpuBridgeFunc, tripletFields,
               EdgeActiveness.Neither)
 
         }
@@ -317,7 +318,7 @@ class GraphImpl[VD: ClassTag, ED: ClassTag] protected (
     }).setName("GraphImpl.aggregateMessages - preAgg")
 
     // do the final reduction reusing the index map
-    preAgg.asInstanceOf[VertexRDD[VD]]
+    preAgg.asInstanceOf[VertexRDD[A]]
   }
 
   override def outerJoinVertices[U: ClassTag, VD2: ClassTag]
@@ -406,7 +407,7 @@ object GraphImpl {
 
     // Convert the vertex partitions in edges to the correct type
     val newEdges = edges.asInstanceOf[EdgeRDDImpl[ED, _]]
-      .mapEdgePartitions((pid, part) => part.withoutVertexAttributes[VD])
+      .mapEdgePartitions((pid, part) => part.withoutVertexAttributes()[VD])
       .cache()
 
     GraphImpl.fromExistingRDDs(vertices, newEdges)

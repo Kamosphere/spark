@@ -485,11 +485,14 @@ class EdgePartition[
    *
    * @return iterator aggregated messages keyed by the receiving vertex id
    */
-  def aggregateEdgeScan
-  (tripletFields: TripletFields,
-   activeness: EdgeActiveness): Iterator[(VertexId, VD)] = {
+  def aggregateIntoGPUEdgeScan[A: ClassTag]
+  (gpuBridgeFunc: (Array[VertexId], Array[Boolean], Array[VD]) => Array[A],
+   tripletFields: TripletFields,
+   activeness: EdgeActiveness): Iterator[(VertexId, A)] = {
     val aggregates = new Array[VD](vertexAttrs.length)
     val bitset = new BitSet(vertexAttrs.length)
+    val activeStatus = new Array[Boolean](vertexAttrs.length)
+    val globalVertexId = new Array[VertexId](vertexAttrs.length)
 
     var i = 0
     while (i < size) {
@@ -511,11 +514,16 @@ class EdgePartition[
         aggregates(localDstId) = dstAttr
         bitset.set(localSrcId)
         bitset.set(localDstId)
+        activeStatus(localSrcId) = isActive(srcId)
+        activeStatus(localDstId) = isActive(dstId)
+        globalVertexId(localSrcId) = srcId
+        globalVertexId(localDstId) = dstId
       }
       i += 1
     }
+    val aggregateResult = gpuBridgeFunc(globalVertexId, activeStatus, aggregates)
 
-    bitset.iterator.map { localId => (local2global(localId), aggregates(localId)) }
+    bitset.iterator.map { localId => (local2global(localId), aggregateResult(localId)) }
   }
 
   /**
@@ -527,11 +535,14 @@ class EdgePartition[
    *
    * @return iterator aggregated messages keyed by the receiving vertex id
    */
-  def aggregateIndexScan
-  (tripletFields: TripletFields,
-   activeness: EdgeActiveness): Iterator[(VertexId, VD)] = {
+  def aggregateIntoGPUIndexScan[A: ClassTag]
+  (gpuBridgeFunc: (Array[VertexId], Array[Boolean], Array[VD]) => Array[A],
+   tripletFields: TripletFields,
+   activeness: EdgeActiveness): Iterator[(VertexId, A)] = {
     val aggregates = new Array[VD](vertexAttrs.length)
     val bitset = new BitSet(vertexAttrs.length)
+    val activeStatus = new Array[Boolean](vertexAttrs.length)
+    val globalVertexId = new Array[VertexId](vertexAttrs.length)
 
     index.iterator.foreach { cluster =>
       val clusterSrcId = cluster._1
@@ -552,6 +563,8 @@ class EdgePartition[
           if (tripletFields.useSrc) vertexAttrs(clusterLocalSrcId) else null.asInstanceOf[VD]
         aggregates(clusterLocalSrcId) = srcAttr
         bitset.set(clusterLocalSrcId)
+        activeStatus(clusterLocalSrcId) = isActive(clusterSrcId)
+        globalVertexId(clusterLocalSrcId) = clusterSrcId
         while (pos < size && localSrcIds(pos) == clusterLocalSrcId) {
           val localDstId = localDstIds(pos)
           val dstId = local2global(localDstId)
@@ -567,13 +580,17 @@ class EdgePartition[
               if (tripletFields.useDst) vertexAttrs(localDstId) else null.asInstanceOf[VD]
             aggregates(localDstId) = dstAttr
             bitset.set(localDstId)
+            activeStatus(localDstId) = isActive(dstId)
+            globalVertexId(localDstId) = dstId
           }
           pos += 1
         }
       }
     }
 
-    bitset.iterator.map { localId => (local2global(localId), aggregates(localId)) }
+    val aggregateResult = gpuBridgeFunc(globalVertexId, activeStatus, aggregates)
+
+    bitset.iterator.map { localId => (local2global(localId), aggregateResult(localId)) }
   }
 }
 

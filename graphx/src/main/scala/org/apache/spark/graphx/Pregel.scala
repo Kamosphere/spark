@@ -17,6 +17,8 @@
 
 package org.apache.spark.graphx
 
+import java.io.{File, PrintWriter}
+
 import scala.reflect.ClassTag
 
 import org.apache.spark.TaskContext
@@ -161,15 +163,18 @@ object Pregel extends Logging {
         val pid = TaskContext.getPartitionId()
         var temp : EdgeTriplet[VD, ED] = null
 
+        val writer = new PrintWriter(new File("/home/liqi/IdeaProjects/GraphXwithGPU/logSpark/" +
+          "testSparkEdgeLog_pid" + pid + "_iter" + i + ".txt"))
         while(iter.hasNext) {
           temp = iter.next()
           var chars = ""
-          chars = chars + " " + temp.srcId + ": " + temp.srcAttr
-          chars = chars + " " + temp.srcId + ": " + temp.dstAttr
-          chars = chars + "Edge attr: " + temp.attr
-          println("In iter " + i + " of part" + pid + ", edge data: "
-            + chars)
+          chars = chars + " " + temp.srcId + " : " + temp.srcAttr
+          chars = chars + " -> " + temp.dstId + " : " + temp.dstAttr
+          chars = chars + " Edge attr: " + temp.attr
+          writer.write("In iter " + i + " of part " + pid + " , edge data: "
+            + chars + '\n')
         }
+        writer.close()
       })
 
       println("*----------------------------------------------*")
@@ -177,12 +182,14 @@ object Pregel extends Logging {
         val pid = TaskContext.getPartitionId()
         var temp : (VertexId, VD) = null
 
+        val writer = new PrintWriter(new File("/home/liqi/IdeaProjects/GraphXwithGPU/logSpark/" +
+          "testSparkVertexLog_pid" + pid + "_iter" + i + ".txt"))
         while(iter.hasNext) {
           temp = iter.next()
           var chars = ""
-          chars = chars + " " + temp._1 + ": " + temp._2
-          println("In iter " + i + " of part" + pid + ", vertex data: "
-            + chars)
+          chars = chars + " " + temp._1 + " : " + temp._2
+          writer.write("In iter " + i + " of part " + pid + " , vertex data: "
+            + chars + '\n')
         }
       })
       println("*----------------------------------------------*")

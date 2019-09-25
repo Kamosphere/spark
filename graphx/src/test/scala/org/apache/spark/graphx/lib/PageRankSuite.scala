@@ -313,4 +313,37 @@ class PageRankSuite extends SparkFunSuite with LocalSparkContext {
 
     }
   }
+
+  test("Sample result in PersonalizedPageRank") {
+    withSpark { sc =>
+      // Check that implementation can handle large vertexIds, SPARK-25149
+      val vertexIdOffset = Int.MaxValue.toLong + 1
+      val sourceOffset = 4
+      val source = vertexIdOffset + sourceOffset
+      val numIter = 10
+      val vertices = vertexIdOffset until vertexIdOffset + numIter
+      val chain1 = vertices.zip(vertices.tail)
+      val rawEdges = sc.parallelize(chain1, 1).map { case (s, d) => (s.toLong, d.toLong) }
+      val chain = Graph.fromEdgeTuples(rawEdges, 1.0).cache()
+      val resetProb = 0.15
+      val tol = 0.0001
+      val errorTol = 1.0e-1
+
+      val a = resetProb / (1 - Math.pow(1 - resetProb, numIter - sourceOffset))
+      // We expect the rank to decay as (1 - resetProb) ^ distance
+      val expectedRanks = sc.parallelize(vertices).map { vid =>
+        val rank = if (vid < source) {
+          0.0
+        } else {
+          a * Math.pow(1 - resetProb, vid - source)
+        }
+        vid -> rank
+      }
+      val expected = VertexRDD(expectedRanks)
+
+      val dynamicRanks = chain.personalizedPageRank(source, tol, resetProb).vertices
+      assert(compareRanks(dynamicRanks, expected) < errorTol)
+
+    }
+  }
 }

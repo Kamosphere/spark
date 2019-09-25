@@ -186,11 +186,11 @@ class GraphImpl[VD: ClassTag, ED: ClassTag] protected (
   // Lower level transformation methods
   // ///////////////////////////////////////////////////////////////////////////////////////////////
 
-  override def aggregateMessagesWithActiveSet[A: ClassTag](
-      sendMsg: EdgeContext[VD, ED, A] => Unit,
-      mergeMsg: (A, A) => A,
-      tripletFields: TripletFields,
-      activeSetOpt: Option[(VertexRDD[_], EdgeDirection)]): VertexRDD[A] = {
+  override def aggregateMessagesWithActiveSet[A: ClassTag]
+  (sendMsg: EdgeContext[VD, ED, A] => Unit,
+   mergeMsg: (A, A) => A,
+   tripletFields: TripletFields,
+   activeSetOpt: Option[(VertexRDD[_], EdgeDirection)]): VertexRDD[A] = {
 
     vertices.cache()
     // For each vertex, replicate its attribute only to partitions where it is
@@ -207,41 +207,117 @@ class GraphImpl[VD: ClassTag, ED: ClassTag] protected (
     // Map and combine.
     val preAgg = view.edges.partitionsRDD.mapPartitions(_.flatMap {
       case (pid, edgePartition) =>
+        var iterResult : Iterator[(VertexId, A)] = null
+        val startTime = System.nanoTime()
         // Choose scan method
         val activeFraction = edgePartition.numActives.getOrElse(0) / edgePartition.indexSize.toFloat
         activeDirectionOpt match {
           case Some(EdgeDirection.Both) =>
             if (activeFraction < 0.8) {
-              edgePartition.aggregateMessagesIndexScan(sendMsg, mergeMsg, tripletFields,
+              iterResult = edgePartition.aggregateMessagesIndexScan(
+                sendMsg, mergeMsg, tripletFields,
                 EdgeActiveness.Both)
             } else {
-              edgePartition.aggregateMessagesEdgeScan(sendMsg, mergeMsg, tripletFields,
+              iterResult = edgePartition.aggregateMessagesEdgeScan(sendMsg, mergeMsg, tripletFields,
                 EdgeActiveness.Both)
             }
           case Some(EdgeDirection.Either) =>
             // TODO: Because we only have a clustered index on the source vertex ID, we can't filter
             // the index here. Instead we have to scan all edges and then do the filter.
-            edgePartition.aggregateMessagesEdgeScan(sendMsg, mergeMsg, tripletFields,
+            iterResult = edgePartition.aggregateMessagesEdgeScan(sendMsg, mergeMsg, tripletFields,
               EdgeActiveness.Either)
           case Some(EdgeDirection.Out) =>
             if (activeFraction < 0.8) {
-              edgePartition.aggregateMessagesIndexScan(sendMsg, mergeMsg, tripletFields,
+              iterResult = edgePartition.aggregateMessagesIndexScan(
+                sendMsg, mergeMsg, tripletFields,
                 EdgeActiveness.SrcOnly)
             } else {
-              edgePartition.aggregateMessagesEdgeScan(sendMsg, mergeMsg, tripletFields,
+              iterResult = edgePartition.aggregateMessagesEdgeScan(sendMsg, mergeMsg, tripletFields,
                 EdgeActiveness.SrcOnly)
             }
           case Some(EdgeDirection.In) =>
-            edgePartition.aggregateMessagesEdgeScan(sendMsg, mergeMsg, tripletFields,
+            iterResult = edgePartition.aggregateMessagesEdgeScan(sendMsg, mergeMsg, tripletFields,
               EdgeActiveness.DstOnly)
           case _ => // None
-            edgePartition.aggregateMessagesEdgeScan(sendMsg, mergeMsg, tripletFields,
+            iterResult = edgePartition.aggregateMessagesEdgeScan(sendMsg, mergeMsg, tripletFields,
               EdgeActiveness.Neither)
+
         }
+        val endTime = System.nanoTime()
+        // scalastyle:off println
+        println("In part" + pid + ", in normal time: "
+          + (endTime - startTime) )
+        // scalastyle:on println
+        iterResult
     }).setName("GraphImpl.aggregateMessages - preAgg")
 
     // do the final reduction reusing the index map
     vertices.aggregateUsingIndex(preAgg, mergeMsg)
+  }
+
+  override def aggregateNothingWithActiveSet
+  (tripletFields: TripletFields,
+   activeSetOpt: Option[(VertexRDD[_], EdgeDirection)]): VertexRDD[VD] = {
+
+    vertices.cache()
+    // For each vertex, replicate its attribute only to partitions where it is
+    // in the relevant position in an edge.
+    replicatedVertexView.upgrade(vertices, tripletFields.useSrc, tripletFields.useDst)
+    val view = activeSetOpt match {
+      case Some((activeSet, _)) =>
+        replicatedVertexView.withActiveSet(activeSet)
+      case None =>
+        replicatedVertexView
+    }
+    val activeDirectionOpt = activeSetOpt.map(_._2)
+
+    // Map and combine.
+    val preAgg = view.edges.partitionsRDD.mapPartitions(_.flatMap {
+      case (pid, edgePartition) =>
+        var iterResult : Iterator[(VertexId, VD)] = null
+        val startTime = System.nanoTime()
+        // Choose scan method
+        val activeFraction = edgePartition.numActives.getOrElse(0) / edgePartition.indexSize.toFloat
+        activeDirectionOpt match {
+          case Some(EdgeDirection.Both) =>
+            if (activeFraction < 0.8) {
+              iterResult = edgePartition.aggregateIndexScan(tripletFields,
+                EdgeActiveness.Both)
+            } else {
+              iterResult = edgePartition.aggregateEdgeScan(tripletFields,
+                EdgeActiveness.Both)
+            }
+          case Some(EdgeDirection.Either) =>
+            // TODO: Because we only have a clustered index on the source vertex ID, we can't filter
+            // the index here. Instead we have to scan all edges and then do the filter.
+            iterResult = edgePartition.aggregateEdgeScan(tripletFields,
+              EdgeActiveness.Either)
+          case Some(EdgeDirection.Out) =>
+            if (activeFraction < 0.8) {
+              iterResult = edgePartition.aggregateIndexScan(tripletFields,
+                EdgeActiveness.SrcOnly)
+            } else {
+              iterResult = edgePartition.aggregateEdgeScan(tripletFields,
+                EdgeActiveness.SrcOnly)
+            }
+          case Some(EdgeDirection.In) =>
+            iterResult = edgePartition.aggregateEdgeScan(tripletFields,
+              EdgeActiveness.DstOnly)
+          case _ => // None
+            iterResult = edgePartition.aggregateEdgeScan(tripletFields,
+              EdgeActiveness.Neither)
+
+        }
+        val endTime = System.nanoTime()
+        // scalastyle:off println
+        println("In part" + pid + ", in normal time: "
+          + (endTime - startTime) )
+        // scalastyle:on println
+        iterResult
+    }).setName("GraphImpl.aggregateMessages - preAgg")
+
+    // do the final reduction reusing the index map
+    preAgg.asInstanceOf[VertexRDD[VD]]
   }
 
   override def outerJoinVertices[U: ClassTag, VD2: ClassTag]

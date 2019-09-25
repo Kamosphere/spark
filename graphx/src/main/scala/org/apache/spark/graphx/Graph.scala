@@ -316,8 +316,8 @@ abstract class Graph[VD: ClassTag, ED: ClassTag] protected () extends Serializab
    * satisfy the predicates
    */
   def subgraph(
-      epred: EdgeTriplet[VD, ED] => Boolean = (x => true),
-      vpred: (VertexId, VD) => Boolean = ((v, d) => true))
+      epred: EdgeTriplet[VD, ED] => Boolean = x => true,
+      vpred: (VertexId, VD) => Boolean = (v, d) => true)
     : Graph[VD, ED]
 
   /**
@@ -377,6 +377,10 @@ abstract class Graph[VD: ClassTag, ED: ClassTag] protected () extends Serializab
     : VertexRDD[A] = {
     aggregateMessagesWithActiveSet(sendMsg, mergeMsg, tripletFields, None)
   }
+
+  def aggregateNothingWithActiveSet
+  (tripletFields: TripletFields,
+   activeSetOpt: Option[(VertexRDD[_], EdgeDirection)]): VertexRDD[VD]
 
   /**
    * Aggregates values from the neighboring edges and vertices of each vertex. The user-supplied

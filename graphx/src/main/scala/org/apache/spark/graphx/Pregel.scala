@@ -19,6 +19,7 @@ package org.apache.spark.graphx
 
 import scala.reflect.ClassTag
 
+import org.apache.spark.TaskContext
 import org.apache.spark.graphx.util.PeriodicGraphCheckpointer
 import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
@@ -113,17 +114,19 @@ object Pregel extends Logging {
    *
    */
   def apply[VD: ClassTag, ED: ClassTag, A: ClassTag]
-     (graph: Graph[VD, ED],
-      initialMsg: A,
-      maxIterations: Int = Int.MaxValue,
-      activeDirection: EdgeDirection = EdgeDirection.Either)
-     (vprog: (VertexId, VD, A) => VD,
-      sendMsg: EdgeTriplet[VD, ED] => Iterator[(VertexId, A)],
-      mergeMsg: (A, A) => A)
-    : Graph[VD, ED] =
+  (graph: Graph[VD, ED],
+   initialMsg: A,
+   maxIterations: Int = Int.MaxValue,
+   activeDirection: EdgeDirection = EdgeDirection.Either)
+  (vprog: (VertexId, VD, A) => VD,
+   sendMsg: EdgeTriplet[VD, ED] => Iterator[(VertexId, A)],
+   mergeMsg: (A, A) => A)
+  : Graph[VD, ED] =
   {
     require(maxIterations > 0, s"Maximum number of iterations must be greater than 0," +
-      s" but got ${maxIterations}")
+      s" but got $maxIterations")
+    // scalastyle:off println
+    val startTime = System.nanoTime()
 
     val checkpointInterval = graph.vertices.sparkContext.getConf
       .getInt("spark.graphx.pregel.checkpointInterval", -1)
@@ -144,6 +147,8 @@ object Pregel extends Logging {
     var i = 0
     while (activeMessages > 0 && i < maxIterations) {
       // Receive the messages and update the vertices.
+
+      val startTimeIter = System.nanoTime()
       prevG = g
       g = g.joinVertices(messages)(vprog)
       graphCheckpointer.update(g)
@@ -152,6 +157,35 @@ object Pregel extends Logging {
       // Send new messages, skipping edges where neither side received a message. We must cache
       // messages so it can be materialized on the next line, allowing us to uncache the previous
       // iteration.
+      g.triplets.foreachPartition(iter => {
+        val pid = TaskContext.getPartitionId()
+        var temp : EdgeTriplet[VD, ED] = null
+
+        while(iter.hasNext) {
+          temp = iter.next()
+          var chars = ""
+          chars = chars + " " + temp.srcId + ": " + temp.srcAttr
+          chars = chars + " " + temp.srcId + ": " + temp.dstAttr
+          chars = chars + "Edge attr: " + temp.attr
+          println("In iter " + i + " of part" + pid + ", edge data: "
+            + chars)
+        }
+      })
+
+      println("*----------------------------------------------*")
+      g.vertices.foreachPartition(iter => {
+        val pid = TaskContext.getPartitionId()
+        var temp : (VertexId, VD) = null
+
+        while(iter.hasNext) {
+          temp = iter.next()
+          var chars = ""
+          chars = chars + " " + temp._1 + ": " + temp._2
+          println("In iter " + i + " of part" + pid + ", vertex data: "
+            + chars)
+        }
+      })
+      println("*----------------------------------------------*")
       messages = GraphXUtils.mapReduceTriplets(
         g, sendMsg, mergeMsg, Some((oldMessages, activeDirection)))
       // The call to count() materializes `messages` and the vertices of `g`. This hides oldMessages
@@ -166,12 +200,23 @@ object Pregel extends Logging {
       oldMessages.unpersist(blocking = false)
       prevG.unpersistVertices(blocking = false)
       prevG.edges.unpersist(blocking = false)
+
+      val endTimeIter = System.nanoTime()
+
+      println("Whole iteration time: " + (endTimeIter - startTimeIter) +
+        ", next iter active node amount: " + activeMessages)
+      println("-------------------------")
       // count the iteration
       i += 1
     }
     messageCheckpointer.unpersistDataSet()
     graphCheckpointer.deleteAllCheckpoints()
     messageCheckpointer.deleteAllCheckpoints()
+
+    val endTime = System.nanoTime()
+
+    println("The whole Pregel process time: " + (endTime - startTime))
+    // scalastyle:on println
     g
   } // end of apply
 

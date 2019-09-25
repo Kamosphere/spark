@@ -69,4 +69,12 @@ object GraphXUtils {
     g.aggregateMessagesWithActiveSet(
       sendMsg, reduceFunc, TripletFields.All, activeSetOpt)
   }
+
+  def testForAgg[VD: ClassTag, ED: ClassTag]
+  (g: Graph[VD, ED],
+   activeSetOpt: Option[(VertexRDD[_], EdgeDirection)] = None):
+  VertexRDD[VD] = {
+    g.aggregateNothingWithActiveSet(
+      TripletFields.All, activeSetOpt)
+  }
 }

@@ -22,7 +22,7 @@ import scala.reflect.ClassTag
 import org.apache.spark.SparkConf
 import org.apache.spark.graphx.impl._
 import org.apache.spark.graphx.util.collection.GraphXPrimitiveKeyOpenHashMap
-import org.apache.spark.util.BoundedPriorityQueue
+import org.apache.spark.util.{BoundedPriorityQueue, LongAccumulator}
 import org.apache.spark.util.collection.{BitSet, OpenHashSet}
 
 object GraphXUtils {
@@ -70,12 +70,29 @@ object GraphXUtils {
       sendMsg, reduceFunc, TripletFields.All, activeSetOpt)
   }
 
-  def testForAgg[VD: ClassTag, ED: ClassTag, A: ClassTag]
-  (g: Graph[VD, ED],
-   gpuBridgeFunc: (Array[VertexId], Array[Boolean], Array[VD]) => Array[A],
+  def mapReduceTripletsIntoGPU[VD: ClassTag, ED: ClassTag, A: ClassTag]
+  (g: Graph[VD, ED], counter: LongAccumulator,
+   gpuBridgeFunc: (Int, Array[VertexId], Array[Boolean], Array[VD])
+     => (Array[VertexId], Array[A], Boolean),
+   globalReduceFunc: (A, A) => A,
    activeSetOpt: Option[(VertexRDD[_], EdgeDirection)] = None):
   VertexRDD[A] = {
-    g.aggregateIntoGPUWithActiveSet(gpuBridgeFunc,
+    g.aggregateIntoGPUWithActiveSet(counter, gpuBridgeFunc, globalReduceFunc,
       TripletFields.All, activeSetOpt)
+  }
+
+  def mapReduceTripletsIntoGPU_Skipping[VD: ClassTag, ED: ClassTag, A: ClassTag]
+  (g: Graph[VD, ED], counter: LongAccumulator,
+   gpuBridgeFunc: Int => (Array[VertexId], Array[A], Boolean),
+   globalReduceFunc: (A, A) => A,
+   activeSetOpt: Option[(VertexRDD[_], EdgeDirection)] = None):
+  VertexRDD[A] = {
+    g.aggregateIntoGPUSkipping(counter, gpuBridgeFunc, globalReduceFunc,
+      TripletFields.All, activeSetOpt)
+  }
+
+  def innerPartitionVertexEdgeCount[VD: ClassTag, ED: ClassTag]
+  (g: Graph[VD, ED]): collection.Map[Int, (Int, Int)] = {
+    g.innerVerticesEdgesCount().collectAsMap()
   }
 }

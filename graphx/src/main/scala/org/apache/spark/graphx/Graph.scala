@@ -23,6 +23,7 @@ import scala.reflect.ClassTag
 import org.apache.spark.graphx.impl._
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
+import org.apache.spark.util.LongAccumulator
 
 
 /**
@@ -379,9 +380,21 @@ abstract class Graph[VD: ClassTag, ED: ClassTag] protected () extends Serializab
   }
 
   def aggregateIntoGPUWithActiveSet[A: ClassTag]
-  (gpuBridgeFunc: (Array[VertexId], Array[Boolean], Array[VD]) => Array[A],
+  (counter: LongAccumulator,
+   gpuBridgeFunc: (Int, Array[VertexId], Array[Boolean], Array[VD])
+     => (Array[VertexId], Array[A], Boolean),
+   globalReduceFunc: (A, A) => A,
    tripletFields: TripletFields,
    activeSetOpt: Option[(VertexRDD[_], EdgeDirection)]): VertexRDD[A]
+
+  def aggregateIntoGPUSkipping[A: ClassTag]
+  (counter: LongAccumulator,
+   gpuBridgeFunc: Int => (Array[VertexId], Array[A], Boolean),
+   globalReduceFunc: (A, A) => A,
+   tripletFields: TripletFields,
+   activeSetOpt: Option[(VertexRDD[_], EdgeDirection)]): VertexRDD[A]
+
+  def innerVerticesEdgesCount(): RDD[(Int, (Int, Int))]
 
   /**
    * Aggregates values from the neighboring edges and vertices of each vertex. The user-supplied

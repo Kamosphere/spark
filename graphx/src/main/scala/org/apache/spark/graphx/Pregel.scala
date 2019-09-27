@@ -159,6 +159,7 @@ object Pregel extends Logging {
       // Send new messages, skipping edges where neither side received a message. We must cache
       // messages so it can be materialized on the next line, allowing us to uncache the previous
       // iteration.
+      /*
       g.triplets.foreachPartition(iter => {
         val pid = TaskContext.getPartitionId()
         var temp : EdgeTriplet[VD, ED] = null
@@ -176,7 +177,8 @@ object Pregel extends Logging {
         }
         writer.close()
       })
-
+      */
+/*
       println("*----------------------------------------------*")
       g.vertices.foreachPartition(iter => {
         val pid = TaskContext.getPartitionId()
@@ -188,11 +190,15 @@ object Pregel extends Logging {
           temp = iter.next()
           var chars = ""
           chars = chars + " " + temp._1 + " : " + temp._2
+          println("In iter " + i + " of part " + pid + " , vertex data: "
+            + chars)
           writer.write("In iter " + i + " of part " + pid + " , vertex data: "
             + chars + '\n')
         }
+        writer.close()
       })
       println("*----------------------------------------------*")
+      */
       messages = GraphXUtils.mapReduceTriplets(
         g, sendMsg, mergeMsg, Some((oldMessages, activeDirection)))
       // The call to count() materializes `messages` and the vertices of `g`. This hides oldMessages

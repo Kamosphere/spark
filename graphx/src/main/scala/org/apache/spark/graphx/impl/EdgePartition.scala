@@ -21,6 +21,7 @@ import scala.reflect.ClassTag
 
 import org.apache.spark.graphx._
 import org.apache.spark.graphx.util.collection.GraphXPrimitiveKeyOpenHashMap
+import org.apache.spark.util.LongAccumulator
 import org.apache.spark.util.collection.BitSet
 
 /**
@@ -486,13 +487,19 @@ class EdgePartition[
    * @return iterator aggregated messages keyed by the receiving vertex id
    */
   def aggregateIntoGPUEdgeScan[A: ClassTag]
-  (gpuBridgeFunc: (Array[VertexId], Array[Boolean], Array[VD]) => Array[A],
+  (pid: Int, counter: LongAccumulator,
+   gpuBridgeFunc: (Int, Array[VertexId], Array[Boolean], Array[VD])
+     => (Array[VertexId], Array[A], Boolean),
    tripletFields: TripletFields,
    activeness: EdgeActiveness): Iterator[(VertexId, A)] = {
     val aggregates = new Array[VD](vertexAttrs.length)
-    val bitset = new BitSet(vertexAttrs.length)
+    val bitSet = new BitSet(vertexAttrs.length)
     val activeStatus = new Array[Boolean](vertexAttrs.length)
     val globalVertexId = new Array[VertexId](vertexAttrs.length)
+    for(i <- vertexAttrs.indices) {
+      activeStatus(i) = false
+      globalVertexId(i) = -1L
+    }
 
     var i = 0
     while (i < size) {
@@ -512,8 +519,6 @@ class EdgePartition[
         val dstAttr = if (tripletFields.useDst) vertexAttrs(localDstId) else null.asInstanceOf[VD]
         aggregates(localSrcId) = srcAttr
         aggregates(localDstId) = dstAttr
-        bitset.set(localSrcId)
-        bitset.set(localDstId)
         activeStatus(localSrcId) = isActive(srcId)
         activeStatus(localDstId) = isActive(dstId)
         globalVertexId(localSrcId) = srcId
@@ -521,9 +526,26 @@ class EdgePartition[
       }
       i += 1
     }
-    val aggregateResult = gpuBridgeFunc(globalVertexId, activeStatus, aggregates)
+    // Input array is a skipped array
+    // Output array should be a linear array
+    val (globalVidResult, globalAggResult, needCombine) =
+      gpuBridgeFunc(pid, globalVertexId, activeStatus, aggregates)
+    val sortedAggregates = new Array[A](vertexAttrs.length)
 
-    bitset.iterator.map { localId => (local2global(localId), aggregateResult(localId)) }
+    if(needCombine) {
+      counter.add(1)
+    }
+
+    // fit linear array to bitSet indexed array
+    var j = 0
+    for(vid <- globalVidResult) {
+      val locals = global2local(vid)
+      bitSet.set(locals)
+      sortedAggregates(locals) = globalAggResult(j)
+      j += 1
+    }
+
+    bitSet.iterator.map { localId => (local2global(localId), sortedAggregates(localId)) }
   }
 
   /**
@@ -536,13 +558,19 @@ class EdgePartition[
    * @return iterator aggregated messages keyed by the receiving vertex id
    */
   def aggregateIntoGPUIndexScan[A: ClassTag]
-  (gpuBridgeFunc: (Array[VertexId], Array[Boolean], Array[VD]) => Array[A],
+  (pid: Int, counter: LongAccumulator,
+   gpuBridgeFunc: (Int, Array[VertexId], Array[Boolean], Array[VD])
+     => (Array[VertexId], Array[A], Boolean),
    tripletFields: TripletFields,
    activeness: EdgeActiveness): Iterator[(VertexId, A)] = {
     val aggregates = new Array[VD](vertexAttrs.length)
-    val bitset = new BitSet(vertexAttrs.length)
+    val bitSet = new BitSet(vertexAttrs.length)
     val activeStatus = new Array[Boolean](vertexAttrs.length)
     val globalVertexId = new Array[VertexId](vertexAttrs.length)
+    for(i <- vertexAttrs.indices) {
+      activeStatus(i) = false
+      globalVertexId(i) = -1L
+    }
 
     index.iterator.foreach { cluster =>
       val clusterSrcId = cluster._1
@@ -562,7 +590,6 @@ class EdgePartition[
         val srcAttr =
           if (tripletFields.useSrc) vertexAttrs(clusterLocalSrcId) else null.asInstanceOf[VD]
         aggregates(clusterLocalSrcId) = srcAttr
-        bitset.set(clusterLocalSrcId)
         activeStatus(clusterLocalSrcId) = isActive(clusterSrcId)
         globalVertexId(clusterLocalSrcId) = clusterSrcId
         while (pos < size && localSrcIds(pos) == clusterLocalSrcId) {
@@ -579,7 +606,6 @@ class EdgePartition[
             val dstAttr =
               if (tripletFields.useDst) vertexAttrs(localDstId) else null.asInstanceOf[VD]
             aggregates(localDstId) = dstAttr
-            bitset.set(localDstId)
             activeStatus(localDstId) = isActive(dstId)
             globalVertexId(localDstId) = dstId
           }
@@ -587,10 +613,51 @@ class EdgePartition[
         }
       }
     }
+    // Input array is a skipped array
+    // Output array should be a linear array
+    val (globalVidResult, globalAggResult, needCombine) =
+      gpuBridgeFunc(pid, globalVertexId, activeStatus, aggregates)
+    val sortedAggregates = new Array[A](vertexAttrs.length)
 
-    val aggregateResult = gpuBridgeFunc(globalVertexId, activeStatus, aggregates)
+    if(needCombine) {
+      counter.add(1)
+    }
 
-    bitset.iterator.map { localId => (local2global(localId), aggregateResult(localId)) }
+    // fit linear array to bitSet indexed array
+    var j = 0
+    for(vid <- globalVidResult) {
+      val locals = global2local(vid)
+      bitSet.set(locals)
+      sortedAggregates(locals) = globalAggResult(j)
+      j += 1
+    }
+
+    bitSet.iterator.map { localId => (local2global(localId), sortedAggregates(localId)) }
+  }
+
+  def aggregateIntoGPUSkipStep[A: ClassTag]
+  (pid: Int, counter: LongAccumulator,
+   gpuBridgeFunc: Int => (Array[VertexId], Array[A], Boolean),
+   tripletFields: TripletFields,
+   activeness: EdgeActiveness): Iterator[(VertexId, A)] = {
+
+    val bitSet = new BitSet(vertexAttrs.length)
+    val (globalVidResult, globalAggResult, needCombine) = gpuBridgeFunc(pid)
+    val sortedAggregates = new Array[A](vertexAttrs.length)
+
+    if(needCombine) {
+      counter.add(1)
+    }
+
+    var j = 0
+    for(vid <- globalVidResult) {
+      val locals = global2local(vid)
+      bitSet.set(locals)
+      sortedAggregates(locals) = globalAggResult(j)
+      j += 1
+    }
+
+    bitSet.iterator.map { localId => (local2global(localId), sortedAggregates(localId)) }
   }
 }
 

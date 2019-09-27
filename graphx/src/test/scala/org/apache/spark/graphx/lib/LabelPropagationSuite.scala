@@ -48,9 +48,9 @@ class LabelPropagationSuite extends SparkFunSuite with LocalSparkContext {
   test("Sample data on Label Propagation") {
     withSpark { sc =>
       // Construct a graph with two cliques connected by a single edge
-      val n = 2
+      val n = 50
       val sourceFile =
-        "/home/liqi/IdeaProjects/GraphXwithGPU/sb.txt"
+        "/home/liqi/IdeaProjects/GraphXwithGPU/testGraphDivideSmall.txt"
       val inputGraph = readFile(sc, sourceFile)
 
       val dynamicRanksTest = LabelPropagation.run(inputGraph, n)

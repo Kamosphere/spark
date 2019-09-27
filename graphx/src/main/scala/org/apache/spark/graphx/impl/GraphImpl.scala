@@ -24,6 +24,7 @@ import org.apache.spark.graphx._
 import org.apache.spark.graphx.util.BytecodeUtils
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
+import org.apache.spark.util.LongAccumulator
 
 /**
  * An implementation of [[org.apache.spark.graphx.Graph]] to support computation on graphs.
@@ -256,7 +257,10 @@ class GraphImpl[VD: ClassTag, ED: ClassTag] protected (
   }
 
   override def aggregateIntoGPUWithActiveSet[A: ClassTag]
-  (gpuBridgeFunc: (Array[VertexId], Array[Boolean], Array[VD]) => Array[A],
+  (counter: LongAccumulator,
+   gpuBridgeFunc: (Int, Array[VertexId], Array[Boolean], Array[VD])
+     => (Array[VertexId], Array[A], Boolean),
+   globalReduceFunc: (A, A) => A,
    tripletFields: TripletFields,
    activeSetOpt: Option[(VertexRDD[_], EdgeDirection)]): VertexRDD[A] = {
 
@@ -282,31 +286,31 @@ class GraphImpl[VD: ClassTag, ED: ClassTag] protected (
         activeDirectionOpt match {
           case Some(EdgeDirection.Both) =>
             if (activeFraction < 0.8) {
-              iterResult = edgePartition.aggregateIntoGPUIndexScan(gpuBridgeFunc, tripletFields,
-                EdgeActiveness.Both)
+              iterResult = edgePartition.aggregateIntoGPUIndexScan(pid, counter, gpuBridgeFunc,
+                tripletFields, EdgeActiveness.Both)
             } else {
-              iterResult = edgePartition.aggregateIntoGPUEdgeScan(gpuBridgeFunc, tripletFields,
-                EdgeActiveness.Both)
+              iterResult = edgePartition.aggregateIntoGPUEdgeScan(pid, counter, gpuBridgeFunc,
+                tripletFields, EdgeActiveness.Both)
             }
           case Some(EdgeDirection.Either) =>
             // TODO: Because we only have a clustered index on the source vertex ID, we can't filter
             // the index here. Instead we have to scan all edges and then do the filter.
-            iterResult = edgePartition.aggregateIntoGPUEdgeScan(gpuBridgeFunc, tripletFields,
-              EdgeActiveness.Either)
+            iterResult = edgePartition.aggregateIntoGPUEdgeScan(pid, counter, gpuBridgeFunc,
+              tripletFields, EdgeActiveness.Either)
           case Some(EdgeDirection.Out) =>
             if (activeFraction < 0.8) {
-              iterResult = edgePartition.aggregateIntoGPUIndexScan(gpuBridgeFunc, tripletFields,
-                EdgeActiveness.SrcOnly)
+              iterResult = edgePartition.aggregateIntoGPUIndexScan(pid, counter, gpuBridgeFunc,
+                tripletFields, EdgeActiveness.SrcOnly)
             } else {
-              iterResult = edgePartition.aggregateIntoGPUEdgeScan(gpuBridgeFunc, tripletFields,
-                EdgeActiveness.SrcOnly)
+              iterResult = edgePartition.aggregateIntoGPUEdgeScan(pid, counter, gpuBridgeFunc,
+                tripletFields, EdgeActiveness.SrcOnly)
             }
           case Some(EdgeDirection.In) =>
-            iterResult = edgePartition.aggregateIntoGPUEdgeScan(gpuBridgeFunc, tripletFields,
-              EdgeActiveness.DstOnly)
+            iterResult = edgePartition.aggregateIntoGPUEdgeScan(pid, counter, gpuBridgeFunc,
+              tripletFields, EdgeActiveness.DstOnly)
           case _ => // None
-            iterResult = edgePartition.aggregateIntoGPUEdgeScan(gpuBridgeFunc, tripletFields,
-              EdgeActiveness.Neither)
+            iterResult = edgePartition.aggregateIntoGPUEdgeScan(pid, counter, gpuBridgeFunc,
+              tripletFields, EdgeActiveness.Neither)
 
         }
         val endTime = System.nanoTime()
@@ -315,10 +319,55 @@ class GraphImpl[VD: ClassTag, ED: ClassTag] protected (
           + (endTime - startTime) )
         // scalastyle:on println
         iterResult
-    }).setName("GraphImpl.aggregateMessages - preAgg")
+    }).setName("GraphImpl.aggregateInGPU - preAgg")
 
     // do the final reduction reusing the index map
-    preAgg.asInstanceOf[VertexRDD[A]]
+    vertices.aggregateUsingIndex(preAgg, globalReduceFunc)
+  }
+
+  override def aggregateIntoGPUSkipping[A: ClassTag]
+  (counter: LongAccumulator,
+   gpuBridgeFunc: Int => (Array[VertexId], Array[A], Boolean),
+   globalReduceFunc: (A, A) => A,
+   tripletFields: TripletFields,
+   activeSetOpt: Option[(VertexRDD[_], EdgeDirection)]): VertexRDD[A] = {
+
+    vertices.cache()
+    // For each vertex, replicate its attribute only to partitions where it is
+    // in the relevant position in an edge.
+    replicatedVertexView.upgrade(vertices, tripletFields.useSrc, tripletFields.useDst)
+    val view = activeSetOpt match {
+      case Some((activeSet, _)) =>
+        replicatedVertexView.withActiveSet(activeSet)
+      case None =>
+        replicatedVertexView
+    }
+
+    // Map and combine.
+    val preAgg = view.edges.partitionsRDD.mapPartitions(_.flatMap {
+      case (pid, edgePartition) =>
+        var iterResult : Iterator[(VertexId, A)] = null
+        val startTime = System.nanoTime()
+        // Choose scan method
+        iterResult = edgePartition.aggregateIntoGPUSkipStep(pid, counter, gpuBridgeFunc,
+          tripletFields, EdgeActiveness.Neither)
+        val endTime = System.nanoTime()
+        // scalastyle:off println
+        println("In part" + pid + ", in normal time: "
+          + (endTime - startTime) )
+        // scalastyle:on println
+        iterResult
+    }).setName("GraphImpl.aggregateInGPUSkipping - preAgg")
+
+    // do the final reduction reusing the index map
+    vertices.aggregateUsingIndex(preAgg, globalReduceFunc)
+  }
+
+  override def innerVerticesEdgesCount(): RDD[(PartitionID, (Int, Int))] = {
+    replicatedVertexView.edges.partitionsRDD.mapPartitions(_.map{
+      case (pid, edgePartition) =>
+        (pid, (edgePartition.indexSize, edgePartition.size))
+    })
   }
 
   override def outerJoinVertices[U: ClassTag, VD2: ClassTag]
@@ -407,7 +456,7 @@ object GraphImpl {
 
     // Convert the vertex partitions in edges to the correct type
     val newEdges = edges.asInstanceOf[EdgeRDDImpl[ED, _]]
-      .mapEdgePartitions((pid, part) => part.withoutVertexAttributes()[VD])
+      .mapEdgePartitions((pid, part) => part.withoutVertexAttributes[VD]())
       .cache()
 
     GraphImpl.fromExistingRDDs(vertices, newEdges)

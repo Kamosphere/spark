@@ -519,8 +519,14 @@ class EdgePartition[
         val dstAttr = if (tripletFields.useDst) vertexAttrs(localDstId) else null.asInstanceOf[VD]
         aggregates(localSrcId) = srcAttr
         aggregates(localDstId) = dstAttr
-        activeStatus(localSrcId) = isActive(srcId)
-        activeStatus(localDstId) = isActive(dstId)
+        if(activeSet.isEmpty) {
+          activeStatus(localSrcId) = true
+          activeStatus(localDstId) = true
+        }
+        else {
+          activeStatus(localSrcId) = isActive(srcId)
+          activeStatus(localDstId) = isActive(dstId)
+        }
         globalVertexId(localSrcId) = srcId
         globalVertexId(localDstId) = dstId
       }
@@ -537,12 +543,12 @@ class EdgePartition[
     }
 
     // fit linear array to bitSet indexed array
-    var j = 0
-    for(vid <- globalVidResult) {
-      val locals = global2local(vid)
+    // size of globalVidResult is duplicate, use globalAggResult to traverse
+
+    for(j <- globalAggResult.indices) {
+      val locals = global2local(globalVidResult(j))
       bitSet.set(locals)
       sortedAggregates(locals) = globalAggResult(j)
-      j += 1
     }
 
     bitSet.iterator.map { localId => (local2global(localId), sortedAggregates(localId)) }
@@ -624,12 +630,12 @@ class EdgePartition[
     }
 
     // fit linear array to bitSet indexed array
-    var j = 0
-    for(vid <- globalVidResult) {
-      val locals = global2local(vid)
+    // size of globalVidResult is duplicate, use globalAggResult to traverse
+
+    for(j <- globalAggResult.indices) {
+      val locals = global2local(globalVidResult(j))
       bitSet.set(locals)
       sortedAggregates(locals) = globalAggResult(j)
-      j += 1
     }
 
     bitSet.iterator.map { localId => (local2global(localId), sortedAggregates(localId)) }
@@ -649,12 +655,13 @@ class EdgePartition[
       counter.add(1)
     }
 
-    var j = 0
-    for(vid <- globalVidResult) {
-      val locals = global2local(vid)
+    // fit linear array to bitSet indexed array
+    // size of globalVidResult is duplicate, use globalAggResult to traverse
+
+    for(j <- globalAggResult.indices) {
+      val locals = global2local(globalVidResult(j))
       bitSet.set(locals)
       sortedAggregates(locals) = globalAggResult(j)
-      j += 1
     }
 
     bitSet.iterator.map { localId => (local2global(localId), sortedAggregates(localId)) }

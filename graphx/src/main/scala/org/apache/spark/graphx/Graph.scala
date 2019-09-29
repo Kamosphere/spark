@@ -390,9 +390,11 @@ abstract class Graph[VD: ClassTag, ED: ClassTag] protected () extends Serializab
   def aggregateIntoGPUSkipping[A: ClassTag]
   (counter: LongAccumulator,
    gpuBridgeFunc: Int => (Array[VertexId], Array[A], Boolean),
-   globalReduceFunc: (A, A) => A,
-   tripletFields: TripletFields,
-   activeSetOpt: Option[(VertexRDD[_], EdgeDirection)]): VertexRDD[A]
+   globalReduceFunc: (A, A) => A): VertexRDD[A]
+
+  def aggregateIntoGPUFinalCollect[A: ClassTag]
+  (gpuBridgeFunc: Int => (Array[VertexId], Array[A], Boolean),
+   globalReduceFunc: (A, A) => A): VertexRDD[A]
 
   def innerVerticesEdgesCount(): RDD[(Int, (Int, Int))]
 

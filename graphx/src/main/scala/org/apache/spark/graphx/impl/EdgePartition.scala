@@ -643,9 +643,7 @@ class EdgePartition[
 
   def aggregateIntoGPUSkipStep[A: ClassTag]
   (pid: Int, counter: LongAccumulator,
-   gpuBridgeFunc: Int => (Array[VertexId], Array[A], Boolean),
-   tripletFields: TripletFields,
-   activeness: EdgeActiveness): Iterator[(VertexId, A)] = {
+   gpuBridgeFunc: Int => (Array[VertexId], Array[A], Boolean)): Iterator[(VertexId, A)] = {
 
     val bitSet = new BitSet(vertexAttrs.length)
     val (globalVidResult, globalAggResult, needCombine) = gpuBridgeFunc(pid)
@@ -654,6 +652,26 @@ class EdgePartition[
     if(needCombine) {
       counter.add(1)
     }
+
+    // fit linear array to bitSet indexed array
+    // size of globalVidResult is duplicate, use globalAggResult to traverse
+
+    for(j <- globalAggResult.indices) {
+      val locals = global2local(globalVidResult(j))
+      bitSet.set(locals)
+      sortedAggregates(locals) = globalAggResult(j)
+    }
+
+    bitSet.iterator.map { localId => (local2global(localId), sortedAggregates(localId)) }
+  }
+
+  def aggregateIntoGPUFinalCollect[A: ClassTag]
+  (pid: Int,
+   gpuBridgeFunc: Int => (Array[VertexId], Array[A], Boolean)): Iterator[(VertexId, A)] = {
+
+    val bitSet = new BitSet(vertexAttrs.length)
+    val (globalVidResult, globalAggResult, needCombine) = gpuBridgeFunc(pid)
+    val sortedAggregates = new Array[A](vertexAttrs.length)
 
     // fit linear array to bitSet indexed array
     // size of globalVidResult is duplicate, use globalAggResult to traverse

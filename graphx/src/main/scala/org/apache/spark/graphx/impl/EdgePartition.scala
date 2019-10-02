@@ -317,6 +317,9 @@ class EdgePartition[
   /** The number of unique source vertices in the partition. */
   def indexSize: Int = index.size
 
+  /** The number of all related vertices in the partition. */
+  def allVertexSize: Int = vertexAttrs.length
+
   /**
    * Get an iterator over the edges in this partition.
    *

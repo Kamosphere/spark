@@ -379,7 +379,7 @@ class GraphImpl[VD: ClassTag, ED: ClassTag] protected (
   override def innerVerticesEdgesCount(): RDD[(PartitionID, (Int, Int))] = {
     replicatedVertexView.edges.partitionsRDD.mapPartitions(_.map{
       case (pid, edgePartition) =>
-        (pid, (edgePartition.indexSize, edgePartition.size))
+        (pid, (edgePartition.allVertexSize, edgePartition.size))
     })
   }
 

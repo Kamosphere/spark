@@ -179,26 +179,22 @@ object Pregel extends Logging {
       })
       */
 /*
-      println("*----------------------------------------------*")
-      g.vertices.foreachPartition(iter => {
+      oldMessages.foreachPartition(iter => {
         val pid = TaskContext.getPartitionId()
-        var temp : (VertexId, VD) = null
+        var temp : (VertexId, A) = null
 
         val writer = new PrintWriter(new File("/home/liqi/IdeaProjects/GraphXwithGPU/logSpark/" +
-          "testSparkVertexLog_pid" + pid + "_iter" + i + ".txt"))
+          "testSparkOldMessageLog_pid" + pid + "_iter" + i + ".txt"))
         while(iter.hasNext) {
           temp = iter.next()
           var chars = ""
           chars = chars + " " + temp._1 + " : " + temp._2
-          println("In iter " + i + " of part " + pid + " , vertex data: "
-            + chars)
-          writer.write("In iter " + i + " of part " + pid + " , vertex data: "
+          writer.write("In iter " + i + " of part " + pid + " , message data: "
             + chars + '\n')
         }
         writer.close()
       })
-      println("*----------------------------------------------*")
-      */
+*/
       messages = GraphXUtils.mapReduceTriplets(
         g, sendMsg, mergeMsg, Some((oldMessages, activeDirection)))
       // The call to count() materializes `messages` and the vertices of `g`. This hides oldMessages

@@ -21,9 +21,13 @@ import scala.language.implicitConversions
 import scala.reflect.ClassTag
 
 import org.apache.spark.graphx.impl._
+import org.apache.spark.graphx.util.collection.GraphXPrimitiveKeyOpenHashMap
+import org.apache.spark.graphx.util.collection.shmManager.shmArrayWriter
+import org.apache.spark.graphx.util.collection.shmManager.shmNamePackager.shmWriterPackager
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.util.LongAccumulator
+import org.apache.spark.util.collection.BitSet
 
 
 /**
@@ -387,13 +391,36 @@ abstract class Graph[VD: ClassTag, ED: ClassTag] protected () extends Serializab
    tripletFields: TripletFields,
    activeSetOpt: Option[(VertexRDD[_], EdgeDirection)]): VertexRDD[A]
 
+  def aggregateIntoGPUShmWithActiveSet[A: ClassTag]
+  (counter: LongAccumulator, identifierArr: Array[String],
+   shmInitFunc: (Array[String], Int) => (Array[shmArrayWriter], shmWriterPackager),
+   shmWriteFunc: (VertexId, Boolean, VD, Array[shmArrayWriter]) => Unit,
+   gpuBridgeFunc: (Int, shmWriterPackager, Int, GraphXPrimitiveKeyOpenHashMap[VertexId, Int])
+     => (BitSet, Array[A], Boolean),
+   globalReduceFunc: (A, A) => A,
+   tripletFields: TripletFields,
+   activeSetOpt: Option[(VertexRDD[_], EdgeDirection)]): VertexRDD[A]
+
   def aggregateIntoGPUSkipping[A: ClassTag]
   (counter: LongAccumulator,
-   gpuBridgeFunc: Int => (Array[VertexId], Array[A], Boolean),
+   gpuBridgeFunc: Int
+     => (Array[VertexId], Array[A], Boolean),
    globalReduceFunc: (A, A) => A): VertexRDD[A]
 
   def aggregateIntoGPUFinalCollect[A: ClassTag]
-  (gpuBridgeFunc: Int => (Array[VertexId], Array[A], Boolean),
+  (gpuBridgeFunc: Int
+    => (Array[VertexId], Array[A], Boolean),
+   globalReduceFunc: (A, A) => A): VertexRDD[A]
+
+  def aggregateIntoGPUSkippingInShm[A: ClassTag]
+  (counter: LongAccumulator,
+   gpuBridgeFunc: (Int, GraphXPrimitiveKeyOpenHashMap[VertexId, Int])
+     => (BitSet, Array[A], Boolean),
+   globalReduceFunc: (A, A) => A): VertexRDD[A]
+
+  def aggregateIntoGPUFinalCollectInShm[A: ClassTag]
+  (gpuBridgeFunc: (Int, GraphXPrimitiveKeyOpenHashMap[VertexId, Int])
+    => (BitSet, Array[A], Boolean),
    globalReduceFunc: (A, A) => A): VertexRDD[A]
 
   def innerVerticesEdgesCount(): RDD[(Int, (Int, Int))]

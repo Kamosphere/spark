@@ -28,7 +28,7 @@ import org.apache.spark.util.collection.OpenHashSet
  *
  * Under the hood, it uses our OpenHashSet implementation.
  */
-private[graphx]
+
 class GraphXPrimitiveKeyOpenHashMap[@specialized(Long, Int) K: ClassTag,
                               @specialized(Long, Int, Double) V: ClassTag](
     val keySet: OpenHashSet[K], var _values: Array[V])
@@ -99,7 +99,7 @@ class GraphXPrimitiveKeyOpenHashMap[@specialized(Long, Int) K: ClassTag,
    *
    * @return the newly updated value.
    */
-  def changeValue(k: K, defaultValue: => V, mergeValue: (V) => V): V = {
+  def changeValue(k: K, defaultValue: => V, mergeValue: V => V): V = {
     val pos = keySet.addWithoutResize(k)
     if ((pos & OpenHashSet.NONEXISTENCE_MASK) != 0) {
       val newValue = defaultValue

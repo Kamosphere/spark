@@ -21,6 +21,9 @@ import scala.reflect.ClassTag
 
 import org.apache.spark.graphx._
 import org.apache.spark.graphx.util.collection.GraphXPrimitiveKeyOpenHashMap
+import org.apache.spark.graphx.util.collection.shmManager.shmArrayWriter
+import org.apache.spark.graphx.util.collection.shmManager.shmLineWriter.shmVertexWriter
+import org.apache.spark.graphx.util.collection.shmManager.shmNamePackager.{shmReaderPackager, shmWriterPackager}
 import org.apache.spark.util.LongAccumulator
 import org.apache.spark.util.collection.BitSet
 
@@ -644,9 +647,165 @@ class EdgePartition[
     bitSet.iterator.map { localId => (local2global(localId), sortedAggregates(localId)) }
   }
 
+  /**
+   * Send nothing along edges and aggregate them at the receiving vertices. Implemented by scanning
+   * all edges sequentially.
+   *
+   * @param tripletFields which triplet fields `sendMsg` uses
+   * @param activeness criteria for filtering edges based on activeness
+   *
+   * @return iterator aggregated messages keyed by the receiving vertex id
+   */
+  def aggregateIntoGPUShmEdgeScan[A: ClassTag]
+  (pid: Int, counter: LongAccumulator, identifierArr: Array[String],
+   shmInitFunc: (Array[String], Int) => (Array[shmArrayWriter], shmWriterPackager),
+   shmWriteFunc: (VertexId, Boolean, VD, Array[shmArrayWriter]) => Unit,
+   gpuBridgeFunc: (Int, shmWriterPackager, Int, GraphXPrimitiveKeyOpenHashMap[VertexId, Int])
+     => (BitSet, Array[A], Boolean),
+   tripletFields: TripletFields,
+   activeness: EdgeActiveness): Iterator[(VertexId, A)] = {
+
+    val writerLineTest = new shmVertexWriter[VD](
+      identifierArr, pid, shmInitFunc, shmWriteFunc)
+    val filterBitSet = new BitSet(vertexAttrs.length)
+
+    var i = 0
+    while (i < size) {
+      val localSrcId = localSrcIds(i)
+      val srcId = local2global(localSrcId)
+      val localDstId = localDstIds(i)
+      val dstId = local2global(localDstId)
+      val edgeIsActive =
+        if (activeness == EdgeActiveness.Neither) true
+        else if (activeness == EdgeActiveness.SrcOnly) isActive(srcId)
+        else if (activeness == EdgeActiveness.DstOnly) isActive(dstId)
+        else if (activeness == EdgeActiveness.Both) isActive(srcId) && isActive(dstId)
+        else if (activeness == EdgeActiveness.Either) isActive(srcId) || isActive(dstId)
+        else throw new Exception("unreachable")
+      if (edgeIsActive) {
+        val srcAttr = if (tripletFields.useSrc) vertexAttrs(localSrcId) else null.asInstanceOf[VD]
+        val dstAttr = if (tripletFields.useDst) vertexAttrs(localDstId) else null.asInstanceOf[VD]
+
+        val srcActive = {
+          if (activeSet.isEmpty) true
+          else isActive(srcId)
+        }
+        val dstActive = {
+          if (activeSet.isEmpty) true
+          else isActive(dstId)
+        }
+
+        if (! filterBitSet.get(localSrcId)) {
+          writerLineTest.input(srcId, srcActive, srcAttr)
+          filterBitSet.set(localSrcId)
+        }
+        if (! filterBitSet.get(localDstId)) {
+          writerLineTest.input(dstId, dstActive, dstAttr)
+          filterBitSet.set(localDstId)
+        }
+
+      }
+      i += 1
+    }
+    // Input array is a linear shm-like array
+    // Output array should be a skipped array
+    val (resultBitSet, resultSortedAgg, needCombine) =
+    gpuBridgeFunc(pid, writerLineTest.returnPackager(),
+      writerLineTest.modifiedVertexAmount, global2local)
+
+    if(needCombine) {
+      counter.add(1)
+    }
+
+    resultBitSet.iterator.map { localId => (local2global(localId), resultSortedAgg(localId)) }
+  }
+
+  /**
+   * Send nothing along edges and aggregate them at the receiving vertices. Implemented by
+   * filtering the source vertex index, then scanning each edge cluster.
+   *
+   * @param tripletFields which triplet fields uses
+   * @param activeness criteria for filtering edges based on activeness
+   *
+   * @return iterator aggregated messages keyed by the receiving vertex id
+   */
+  def aggregateIntoGPUShmIndexScan[A: ClassTag]
+  (pid: Int, counter: LongAccumulator, identifierArr: Array[String],
+   shmInitFunc: (Array[String], Int) => (Array[shmArrayWriter], shmWriterPackager),
+   shmWriteFunc: (VertexId, Boolean, VD, Array[shmArrayWriter]) => Unit,
+   gpuBridgeFunc: (Int, shmWriterPackager, Int, GraphXPrimitiveKeyOpenHashMap[VertexId, Int])
+     => (BitSet, Array[A], Boolean),
+   tripletFields: TripletFields,
+   activeness: EdgeActiveness): Iterator[(VertexId, A)] = {
+
+    val writerLineTest = new shmVertexWriter[VD](
+      identifierArr, pid, shmInitFunc, shmWriteFunc)
+    val filterBitSet = new BitSet(vertexAttrs.length)
+
+    index.iterator.foreach { cluster =>
+      val clusterSrcId = cluster._1
+      val clusterPos = cluster._2
+      val clusterLocalSrcId = localSrcIds(clusterPos)
+
+      val scanCluster =
+        if (activeness == EdgeActiveness.Neither) true
+        else if (activeness == EdgeActiveness.SrcOnly) isActive(clusterSrcId)
+        else if (activeness == EdgeActiveness.DstOnly) true
+        else if (activeness == EdgeActiveness.Both) isActive(clusterSrcId)
+        else if (activeness == EdgeActiveness.Either) true
+        else throw new Exception("unreachable")
+
+      if (scanCluster) {
+        var pos = clusterPos
+        val srcAttr =
+          if (tripletFields.useSrc) vertexAttrs(clusterLocalSrcId) else null.asInstanceOf[VD]
+
+        if (! filterBitSet.get(clusterLocalSrcId)) {
+          writerLineTest.input(clusterSrcId, isActive(clusterSrcId), srcAttr)
+          filterBitSet.set(clusterLocalSrcId)
+        }
+
+        while (pos < size && localSrcIds(pos) == clusterLocalSrcId) {
+          val localDstId = localDstIds(pos)
+          val dstId = local2global(localDstId)
+          val edgeIsActive =
+            if (activeness == EdgeActiveness.Neither) true
+            else if (activeness == EdgeActiveness.SrcOnly) true
+            else if (activeness == EdgeActiveness.DstOnly) isActive(dstId)
+            else if (activeness == EdgeActiveness.Both) isActive(dstId)
+            else if (activeness == EdgeActiveness.Either) isActive(clusterSrcId) || isActive(dstId)
+            else throw new Exception("unreachable")
+          if (edgeIsActive) {
+            val dstAttr =
+              if (tripletFields.useDst) vertexAttrs(localDstId) else null.asInstanceOf[VD]
+
+            if (! filterBitSet.get(localDstId)) {
+              writerLineTest.input(dstId, isActive(dstId), dstAttr)
+              filterBitSet.set(localDstId)
+            }
+
+          }
+          pos += 1
+        }
+      }
+    }
+    // Input array is a linear shm-like array
+    // Output array should be a skipped array
+    val (resultBitSet, resultSortedAgg, needCombine) =
+    gpuBridgeFunc(pid, writerLineTest.returnPackager(),
+      writerLineTest.modifiedVertexAmount, global2local)
+
+    if(needCombine) {
+      counter.add(1)
+    }
+
+    resultBitSet.iterator.map { localId => (local2global(localId), resultSortedAgg(localId)) }
+  }
+
   def aggregateIntoGPUSkipStep[A: ClassTag]
   (pid: Int, counter: LongAccumulator,
-   gpuBridgeFunc: Int => (Array[VertexId], Array[A], Boolean)): Iterator[(VertexId, A)] = {
+   gpuBridgeFunc: Int
+     => (Array[VertexId], Array[A], Boolean)): Iterator[(VertexId, A)] = {
 
     val bitSet = new BitSet(vertexAttrs.length)
     val (globalVidResult, globalAggResult, needCombine) = gpuBridgeFunc(pid)
@@ -670,7 +829,8 @@ class EdgePartition[
 
   def aggregateIntoGPUFinalCollect[A: ClassTag]
   (pid: Int,
-   gpuBridgeFunc: Int => (Array[VertexId], Array[A], Boolean)): Iterator[(VertexId, A)] = {
+   gpuBridgeFunc: Int
+     => (Array[VertexId], Array[A], Boolean)): Iterator[(VertexId, A)] = {
 
     val bitSet = new BitSet(vertexAttrs.length)
     val (globalVidResult, globalAggResult, needCombine) = gpuBridgeFunc(pid)
@@ -686,6 +846,30 @@ class EdgePartition[
     }
 
     bitSet.iterator.map { localId => (local2global(localId), sortedAggregates(localId)) }
+  }
+
+  def aggregateIntoGPUSkipStepInShm[A: ClassTag]
+  (pid: Int, counter: LongAccumulator,
+   gpuBridgeFunc: (Int, GraphXPrimitiveKeyOpenHashMap[VertexId, Int])
+     => (BitSet, Array[A], Boolean)): Iterator[(VertexId, A)] = {
+
+    val (resultBitSet, resultSortedAgg, needCombine) = gpuBridgeFunc(pid, global2local)
+
+    if(needCombine) {
+      counter.add(1)
+    }
+
+    resultBitSet.iterator.map { localId => (local2global(localId), resultSortedAgg(localId)) }
+  }
+
+  def aggregateIntoGPUFinalCollectInShm[A: ClassTag]
+  (pid: Int,
+   gpuBridgeFunc: (Int, GraphXPrimitiveKeyOpenHashMap[VertexId, Int])
+     => (BitSet, Array[A], Boolean)): Iterator[(VertexId, A)] = {
+
+    val (resultBitSet, resultSortedAgg, needCombine) = gpuBridgeFunc(pid, global2local)
+
+    resultBitSet.iterator.map { localId => (local2global(localId), resultSortedAgg(localId)) }
   }
 }
 

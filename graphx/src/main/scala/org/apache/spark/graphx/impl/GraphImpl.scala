@@ -22,9 +22,13 @@ import scala.reflect.{classTag, ClassTag}
 import org.apache.spark.HashPartitioner
 import org.apache.spark.graphx._
 import org.apache.spark.graphx.util.BytecodeUtils
+import org.apache.spark.graphx.util.collection.GraphXPrimitiveKeyOpenHashMap
+import org.apache.spark.graphx.util.collection.shmManager.shmArrayWriter
+import org.apache.spark.graphx.util.collection.shmManager.shmNamePackager.shmWriterPackager
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.util.LongAccumulator
+import org.apache.spark.util.collection.BitSet
 
 /**
  * An implementation of [[org.apache.spark.graphx.Graph]] to support computation on graphs.
@@ -325,9 +329,88 @@ class GraphImpl[VD: ClassTag, ED: ClassTag] protected (
     vertices.aggregateUsingIndex(preAgg, globalReduceFunc)
   }
 
+  override def aggregateIntoGPUShmWithActiveSet[A: ClassTag]
+  (counter: LongAccumulator, identifierArr: Array[String],
+   shmInitFunc: (Array[String], Int) => (Array[shmArrayWriter], shmWriterPackager),
+   shmWriteFunc: (VertexId, Boolean, VD, Array[shmArrayWriter]) => Unit,
+   gpuBridgeFunc: (Int, shmWriterPackager, Int, GraphXPrimitiveKeyOpenHashMap[VertexId, Int])
+     => (BitSet, Array[A], Boolean),
+   globalReduceFunc: (A, A) => A,
+   tripletFields: TripletFields,
+   activeSetOpt: Option[(VertexRDD[_], EdgeDirection)]): VertexRDD[A] = {
+
+    vertices.cache()
+    // For each vertex, replicate its attribute only to partitions where it is
+    // in the relevant position in an edge.
+    replicatedVertexView.upgrade(vertices, tripletFields.useSrc, tripletFields.useDst)
+    val view = activeSetOpt match {
+      case Some((activeSet, _)) =>
+        replicatedVertexView.withActiveSet(activeSet)
+      case None =>
+        replicatedVertexView
+    }
+    val activeDirectionOpt = activeSetOpt.map(_._2)
+
+    // Map and combine.
+    val preAgg = view.edges.partitionsRDD.mapPartitions(_.flatMap {
+      case (pid, edgePartition) =>
+        var iterResult : Iterator[(VertexId, A)] = null
+        val startTime = System.nanoTime()
+        // Choose scan method
+        val activeFraction = edgePartition.numActives.getOrElse(0) / edgePartition.indexSize.toFloat
+        activeDirectionOpt match {
+          case Some(EdgeDirection.Both) =>
+            if (activeFraction < 0.8) {
+              iterResult = edgePartition.aggregateIntoGPUShmIndexScan(pid, counter, identifierArr,
+                shmInitFunc, shmWriteFunc, gpuBridgeFunc,
+                tripletFields, EdgeActiveness.Both)
+            } else {
+              iterResult = edgePartition.aggregateIntoGPUShmEdgeScan(pid, counter, identifierArr,
+                shmInitFunc, shmWriteFunc, gpuBridgeFunc,
+                tripletFields, EdgeActiveness.Both)
+            }
+          case Some(EdgeDirection.Either) =>
+            // TODO: Because we only have a clustered index on the source vertex ID, we can't filter
+            // the index here. Instead we have to scan all edges and then do the filter.
+            iterResult = edgePartition.aggregateIntoGPUShmEdgeScan(pid, counter, identifierArr,
+              shmInitFunc, shmWriteFunc, gpuBridgeFunc,
+              tripletFields, EdgeActiveness.Either)
+          case Some(EdgeDirection.Out) =>
+            if (activeFraction < 0.8) {
+              iterResult = edgePartition.aggregateIntoGPUShmIndexScan(pid, counter, identifierArr,
+                shmInitFunc, shmWriteFunc, gpuBridgeFunc,
+                tripletFields, EdgeActiveness.SrcOnly)
+            } else {
+              iterResult = edgePartition.aggregateIntoGPUShmEdgeScan(pid, counter, identifierArr,
+                shmInitFunc, shmWriteFunc, gpuBridgeFunc,
+                tripletFields, EdgeActiveness.SrcOnly)
+            }
+          case Some(EdgeDirection.In) =>
+            iterResult = edgePartition.aggregateIntoGPUShmEdgeScan(pid, counter, identifierArr,
+              shmInitFunc, shmWriteFunc, gpuBridgeFunc,
+              tripletFields, EdgeActiveness.DstOnly)
+          case _ => // None
+            iterResult = edgePartition.aggregateIntoGPUShmEdgeScan(pid, counter, identifierArr,
+              shmInitFunc, shmWriteFunc, gpuBridgeFunc,
+              tripletFields, EdgeActiveness.Neither)
+
+        }
+        val endTime = System.nanoTime()
+        // scalastyle:off println
+        println("In part" + pid + ", in normal time: "
+          + (endTime - startTime) )
+        // scalastyle:on println
+        iterResult
+    }).setName("GraphImpl.aggregateInGPU - preAgg")
+
+    // do the final reduction reusing the index map
+    vertices.aggregateUsingIndex(preAgg, globalReduceFunc)
+  }
+
   override def aggregateIntoGPUSkipping[A: ClassTag]
   (counter: LongAccumulator,
-   gpuBridgeFunc: Int => (Array[VertexId], Array[A], Boolean),
+   gpuBridgeFunc: Int
+     => (Array[VertexId], Array[A], Boolean),
    globalReduceFunc: (A, A) => A): VertexRDD[A] = {
 
     val view = replicatedVertexView
@@ -352,7 +435,8 @@ class GraphImpl[VD: ClassTag, ED: ClassTag] protected (
   }
 
   override def aggregateIntoGPUFinalCollect[A: ClassTag]
-  (gpuBridgeFunc: Int => (Array[VertexId], Array[A], Boolean),
+  (gpuBridgeFunc: Int
+    => (Array[VertexId], Array[A], Boolean),
    globalReduceFunc: (A, A) => A): VertexRDD[A] = {
 
     val view = replicatedVertexView
@@ -371,6 +455,59 @@ class GraphImpl[VD: ClassTag, ED: ClassTag] protected (
         // scalastyle:on println
         iterResult
     }).setName("GraphImpl.aggregateInGPUFinal - preAgg")
+
+    // do the final reduction reusing the index map
+    vertices.aggregateUsingIndex(preAgg, globalReduceFunc)
+  }
+
+  override def aggregateIntoGPUSkippingInShm[A: ClassTag]
+  (counter: LongAccumulator,
+   gpuBridgeFunc: (Int, GraphXPrimitiveKeyOpenHashMap[VertexId, Int])
+     => (BitSet, Array[A], Boolean),
+   globalReduceFunc: (A, A) => A): VertexRDD[A] = {
+
+    val view = replicatedVertexView
+
+    // Map and combine.
+    val preAgg = view.edges.partitionsRDD.mapPartitions(_.flatMap {
+      case (pid, edgePartition) =>
+        var iterResult : Iterator[(VertexId, A)] = null
+        val startTime = System.nanoTime()
+        // Choose scan method
+        iterResult = edgePartition.aggregateIntoGPUSkipStepInShm(pid, counter, gpuBridgeFunc)
+        val endTime = System.nanoTime()
+        // scalastyle:off println
+        println("In part" + pid + ", in skipping time: "
+          + (endTime - startTime) )
+        // scalastyle:on println
+        iterResult
+    }).setName("GraphImpl.aggregateInGPUSkippingInShm - preAgg")
+
+    // do the final reduction reusing the index map
+    vertices.aggregateUsingIndex(preAgg, globalReduceFunc)
+  }
+
+  override def aggregateIntoGPUFinalCollectInShm[A: ClassTag]
+  (gpuBridgeFunc: (Int, GraphXPrimitiveKeyOpenHashMap[VertexId, Int])
+    => (BitSet, Array[A], Boolean),
+   globalReduceFunc: (A, A) => A): VertexRDD[A] = {
+
+    val view = replicatedVertexView
+
+    // Map and combine.
+    val preAgg = view.edges.partitionsRDD.mapPartitions(_.flatMap {
+      case (pid, edgePartition) =>
+        var iterResult : Iterator[(VertexId, A)] = null
+        val startTime = System.nanoTime()
+        // Choose scan method
+        iterResult = edgePartition.aggregateIntoGPUFinalCollectInShm(pid, gpuBridgeFunc)
+        val endTime = System.nanoTime()
+        // scalastyle:off println
+        println("In part" + pid + ", in final collect time: "
+          + (endTime - startTime) )
+        // scalastyle:on println
+        iterResult
+    }).setName("GraphImpl.aggregateInGPUFinalInShm - preAgg")
 
     // do the final reduction reusing the index map
     vertices.aggregateUsingIndex(preAgg, globalReduceFunc)

@@ -22,6 +22,8 @@ import scala.reflect.ClassTag
 import org.apache.spark.SparkConf
 import org.apache.spark.graphx.impl._
 import org.apache.spark.graphx.util.collection.GraphXPrimitiveKeyOpenHashMap
+import org.apache.spark.graphx.util.collection.shmManager._
+import org.apache.spark.graphx.util.collection.shmManager.shmNamePackager.shmWriterPackager
 import org.apache.spark.util.{BoundedPriorityQueue, LongAccumulator}
 import org.apache.spark.util.collection.{BitSet, OpenHashSet}
 
@@ -43,13 +45,17 @@ object GraphXUtils {
       classOf[EdgeDirection],
       classOf[GraphXPrimitiveKeyOpenHashMap[VertexId, Int]],
       classOf[OpenHashSet[Int]],
-      classOf[OpenHashSet[Long]]))
+      classOf[OpenHashSet[Long]],
+      classOf[shmArrayWriter],
+      classOf[shmArrayReader],
+      classOf[shmArrayPrototype],
+      classOf[shmPackager]))
   }
 
   /**
    * A proxy method to map the obsolete API to the new one.
    */
-  private[graphx] def mapReduceTriplets[VD: ClassTag, ED: ClassTag, A: ClassTag](
+  def mapReduceTriplets[VD: ClassTag, ED: ClassTag, A: ClassTag](
       g: Graph[VD, ED],
       mapFunc: EdgeTriplet[VD, ED] => Iterator[(VertexId, A)],
       reduceFunc: (A, A) => A,
@@ -81,9 +87,25 @@ object GraphXUtils {
       TripletFields.All, activeSetOpt)
   }
 
+  def mapReduceTripletsIntoGPUInShm[VD: ClassTag, ED: ClassTag, A: ClassTag]
+  (g: Graph[VD, ED], counter: LongAccumulator,
+   identifierArr: Array[String],
+   shmInitFunc: (Array[String], Int) => (Array[shmArrayWriter], shmWriterPackager),
+   shmWriteFunc: (VertexId, Boolean, VD, Array[shmArrayWriter]) => Unit,
+   gpuBridgeFunc: (Int, shmWriterPackager, Int, GraphXPrimitiveKeyOpenHashMap[VertexId, Int])
+     => (BitSet, Array[A], Boolean),
+   globalReduceFunc: (A, A) => A,
+   activeSetOpt: Option[(VertexRDD[_], EdgeDirection)] = None):
+  VertexRDD[A] = {
+    g.aggregateIntoGPUShmWithActiveSet(counter, identifierArr,
+      shmInitFunc, shmWriteFunc, gpuBridgeFunc, globalReduceFunc,
+      TripletFields.All, activeSetOpt)
+  }
+
   def mapReduceTripletsIntoGPU_Skipping[VD: ClassTag, ED: ClassTag, A: ClassTag]
   (g: Graph[VD, ED], counter: LongAccumulator,
-   gpuBridgeFunc: Int => (Array[VertexId], Array[A], Boolean),
+   gpuBridgeFunc: Int
+     => (Array[VertexId], Array[A], Boolean),
    globalReduceFunc: (A, A) => A):
   VertexRDD[A] = {
     g.aggregateIntoGPUSkipping(counter, gpuBridgeFunc, globalReduceFunc)
@@ -91,10 +113,29 @@ object GraphXUtils {
 
   def mapReduceTripletsIntoGPU_FinalCollect[VD: ClassTag, ED: ClassTag, A: ClassTag]
   (g: Graph[VD, ED],
-   gpuBridgeFunc: Int => (Array[VertexId], Array[A], Boolean),
+   gpuBridgeFunc: Int
+     => (Array[VertexId], Array[A], Boolean),
    globalReduceFunc: (A, A) => A):
   VertexRDD[A] = {
     g.aggregateIntoGPUFinalCollect(gpuBridgeFunc, globalReduceFunc)
+  }
+
+  def mapReduceTripletsIntoGPU_SkippingInShm[VD: ClassTag, ED: ClassTag, A: ClassTag]
+  (g: Graph[VD, ED], counter: LongAccumulator,
+   gpuBridgeFunc: (Int, GraphXPrimitiveKeyOpenHashMap[VertexId, Int])
+     => (BitSet, Array[A], Boolean),
+   globalReduceFunc: (A, A) => A):
+  VertexRDD[A] = {
+    g.aggregateIntoGPUSkippingInShm(counter, gpuBridgeFunc, globalReduceFunc)
+  }
+
+  def mapReduceTripletsIntoGPU_FinalCollectInShm[VD: ClassTag, ED: ClassTag, A: ClassTag]
+  (g: Graph[VD, ED],
+   gpuBridgeFunc: (Int, GraphXPrimitiveKeyOpenHashMap[VertexId, Int])
+     => (BitSet, Array[A], Boolean),
+   globalReduceFunc: (A, A) => A):
+  VertexRDD[A] = {
+    g.aggregateIntoGPUFinalCollectInShm(gpuBridgeFunc, globalReduceFunc)
   }
 
   def innerPartitionVertexEdgeCount[VD: ClassTag, ED: ClassTag]

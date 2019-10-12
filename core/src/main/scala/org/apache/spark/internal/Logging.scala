@@ -44,7 +44,7 @@ trait Logging {
   protected def log: Logger = {
     if (log_ == null) {
       initializeLogIfNecessary(false)
-      log_ = LoggerFactory.getLogger(logName)
+      log_ = LoggerFactory.getLogger(logName + " " + System.nanoTime())
     }
     log_
   }
@@ -162,7 +162,7 @@ trait Logging {
   }
 }
 
-private[spark] object Logging {
+object Logging {
   @volatile private var initialized = false
   @volatile private var defaultRootLevel: Level = null
   @volatile private var defaultSparkLog4jConfig = false

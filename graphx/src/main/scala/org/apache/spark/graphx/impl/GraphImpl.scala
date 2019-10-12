@@ -25,6 +25,7 @@ import org.apache.spark.graphx.util.BytecodeUtils
 import org.apache.spark.graphx.util.collection.GraphXPrimitiveKeyOpenHashMap
 import org.apache.spark.graphx.util.collection.shmManager.shmArrayWriter
 import org.apache.spark.graphx.util.collection.shmManager.shmNamePackager.shmWriterPackager
+import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.util.LongAccumulator
@@ -40,7 +41,7 @@ import org.apache.spark.util.collection.BitSet
 class GraphImpl[VD: ClassTag, ED: ClassTag] protected (
     @transient val vertices: VertexRDD[VD],
     @transient val replicatedVertexView: ReplicatedVertexView[VD, ED])
-  extends Graph[VD, ED] with Serializable {
+  extends Graph[VD, ED] with Serializable with Logging {
 
   /** Default constructor is provided to support serialization */
   protected def this() = this(null, null)
@@ -250,7 +251,9 @@ class GraphImpl[VD: ClassTag, ED: ClassTag] protected (
         }
         val endTime = System.nanoTime()
         // scalastyle:off println
-        println("In part" + pid + ", in normal time: "
+        logInfo("In part " + pid + ", in normal time: "
+          + (endTime - startTime) )
+        println("In part " + pid + ", in normal time: "
           + (endTime - startTime) )
         // scalastyle:on println
         iterResult
@@ -319,7 +322,9 @@ class GraphImpl[VD: ClassTag, ED: ClassTag] protected (
         }
         val endTime = System.nanoTime()
         // scalastyle:off println
-        println("In part" + pid + ", in normal time: "
+        logInfo("In part " + pid + ", in normal time: "
+          + (endTime - startTime) )
+        println("In part " + pid + ", in normal time: "
           + (endTime - startTime) )
         // scalastyle:on println
         iterResult
@@ -397,7 +402,9 @@ class GraphImpl[VD: ClassTag, ED: ClassTag] protected (
         }
         val endTime = System.nanoTime()
         // scalastyle:off println
-        println("In part" + pid + ", in normal time: "
+        logInfo("In part " + pid + ", in normal time: "
+          + (endTime - startTime) )
+        println("In part " + pid + ", in normal time: "
           + (endTime - startTime) )
         // scalastyle:on println
         iterResult
@@ -424,7 +431,9 @@ class GraphImpl[VD: ClassTag, ED: ClassTag] protected (
         iterResult = edgePartition.aggregateIntoGPUSkipStep(pid, counter, gpuBridgeFunc)
         val endTime = System.nanoTime()
         // scalastyle:off println
-        println("In part" + pid + ", in skipping time: "
+        logInfo("In part " + pid + ", in skipping time: "
+          + (endTime - startTime) )
+        println("In part " + pid + ", in skipping time: "
           + (endTime - startTime) )
         // scalastyle:on println
         iterResult
@@ -450,7 +459,9 @@ class GraphImpl[VD: ClassTag, ED: ClassTag] protected (
         iterResult = edgePartition.aggregateIntoGPUFinalCollect(pid, gpuBridgeFunc)
         val endTime = System.nanoTime()
         // scalastyle:off println
-        println("In part" + pid + ", in final collect time: "
+        logInfo("In part " + pid + ", in final collect time: "
+          + (endTime - startTime) )
+        println("In part " + pid + ", in final collect time: "
           + (endTime - startTime) )
         // scalastyle:on println
         iterResult
@@ -477,7 +488,9 @@ class GraphImpl[VD: ClassTag, ED: ClassTag] protected (
         iterResult = edgePartition.aggregateIntoGPUSkipStepInShm(pid, counter, gpuBridgeFunc)
         val endTime = System.nanoTime()
         // scalastyle:off println
-        println("In part" + pid + ", in skipping time: "
+        logInfo("In part " + pid + ", in skipping time: "
+          + (endTime - startTime) )
+        println("In part " + pid + ", in skipping time: "
           + (endTime - startTime) )
         // scalastyle:on println
         iterResult
@@ -503,7 +516,9 @@ class GraphImpl[VD: ClassTag, ED: ClassTag] protected (
         iterResult = edgePartition.aggregateIntoGPUFinalCollectInShm(pid, gpuBridgeFunc)
         val endTime = System.nanoTime()
         // scalastyle:off println
-        println("In part" + pid + ", in final collect time: "
+        logInfo("In part " + pid + ", in final collect time: "
+          + (endTime - startTime) )
+        println("In part " + pid + ", in final collect time: "
           + (endTime - startTime) )
         // scalastyle:on println
         iterResult

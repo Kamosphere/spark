@@ -66,7 +66,7 @@ class PageRankSuite extends SparkFunSuite with LocalSparkContext {
     a.leftJoin(b) { case (id, a, bOpt) => (a - bOpt.getOrElse(0.0)) * (a - bOpt.getOrElse(0.0)) }
       .map { case (id, error) => error }.sum()
   }
-
+/*
   test("Star PageRank") {
     withSpark { sc =>
       val nVertices = 100
@@ -316,18 +316,18 @@ class PageRankSuite extends SparkFunSuite with LocalSparkContext {
 
     }
   }
-
+*/
   test("Sample result in PersonalizedPageRank") {
     withSpark { sc =>
 
       // scalastyle:off println
       val sourceFile =
-        "/home/liqi/IdeaProjects/GraphXwithGPU/testGraph.txt"
+        "/home/liqi/IdeaProjects/GraphXwithGPU/sb.txt"
       val inputGraph = readFile(sc, sourceFile)
       val resetProb = 0.15
-      val tol = 0.0001
+      val tol = 0.1
 
-      val dynamicRanksTest = inputGraph.personalizedPageRank(99999, tol, resetProb).vertices
+      val dynamicRanksTest = inputGraph.personalizedPageRank(1, tol, resetProb).vertices
       val result = dynamicRanksTest.collect()
 
       val writer = new PrintWriter(new File("/home/liqi/IdeaProjects/GraphXwithGPU/" +

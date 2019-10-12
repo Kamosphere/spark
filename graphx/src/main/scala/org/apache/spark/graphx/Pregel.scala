@@ -150,6 +150,9 @@ object Pregel extends Logging {
     while (activeMessages > 0 && i < maxIterations) {
       // Receive the messages and update the vertices.
 
+      logInfo("Pregel finished iteration " + i)
+      println("Pregel finished iteration " + i)
+
       val startTimeIter = System.nanoTime()
       prevG = g
       g = g.joinVertices(messages)(vprog)
@@ -178,7 +181,7 @@ object Pregel extends Logging {
         writer.close()
       })
       */
-/*
+
       oldMessages.foreachPartition(iter => {
         val pid = TaskContext.getPartitionId()
         var temp : (VertexId, A) = null
@@ -194,7 +197,7 @@ object Pregel extends Logging {
         }
         writer.close()
       })
-*/
+
       messages = GraphXUtils.mapReduceTriplets(
         g, sendMsg, mergeMsg, Some((oldMessages, activeDirection)))
       // The call to count() materializes `messages` and the vertices of `g`. This hides oldMessages
@@ -204,6 +207,7 @@ object Pregel extends Logging {
       activeMessages = messages.count()
 
       logInfo("Pregel finished iteration " + i)
+      println("Pregel finished iteration " + i)
 
       // Unpersist the RDDs hidden by newly-materialized RDDs
       oldMessages.unpersist(blocking = false)
@@ -212,6 +216,12 @@ object Pregel extends Logging {
 
       val endTimeIter = System.nanoTime()
 
+      logInfo("-------------------------")
+      logInfo("Whole iteration time: " + (endTimeIter - startTimeIter) +
+        ", next iter active node amount: " + activeMessages)
+      logInfo("-------------------------")
+
+      println("-------------------------")
       println("Whole iteration time: " + (endTimeIter - startTimeIter) +
         ", next iter active node amount: " + activeMessages)
       println("-------------------------")
@@ -224,6 +234,7 @@ object Pregel extends Logging {
 
     val endTime = System.nanoTime()
 
+    logInfo("The whole Pregel process time: " + (endTime - startTime))
     println("The whole Pregel process time: " + (endTime - startTime))
     // scalastyle:on println
     g

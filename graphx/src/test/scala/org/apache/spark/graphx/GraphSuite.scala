@@ -25,7 +25,7 @@ import org.apache.spark.storage.StorageLevel
 import org.apache.spark.util.Utils
 
 class GraphSuite extends SparkFunSuite with LocalSparkContext {
-
+/*
   def starGraph(sc: SparkContext, n: Int): Graph[String, Int] = {
     Graph.fromEdgeTuples(sc.parallelize((1 to n).map(x => (0: VertexId, x: VertexId)), 3), "v")
   }
@@ -413,4 +413,5 @@ class GraphSuite extends SparkFunSuite with LocalSparkContext {
       assert(g0.pickRandomVertex() === 1L)
     }
   }
+  */
 }

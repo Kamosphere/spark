@@ -66,7 +66,7 @@ class PageRankSuite extends SparkFunSuite with LocalSparkContext {
     a.leftJoin(b) { case (id, a, bOpt) => (a - bOpt.getOrElse(0.0)) * (a - bOpt.getOrElse(0.0)) }
       .map { case (id, error) => error }.sum()
   }
-/*
+
   test("Star PageRank") {
     withSpark { sc =>
       val nVertices = 100
@@ -316,8 +316,8 @@ class PageRankSuite extends SparkFunSuite with LocalSparkContext {
 
     }
   }
-*/
-  test("Sample result in PersonalizedPageRank") {
+
+  test("Sample result generate in PersonalizedPageRank") {
     withSpark { sc =>
 
       // scalastyle:off println

@@ -438,7 +438,7 @@
       <dependency>
         <groupId>commons-beanutils</groupId>
         <artifactId>commons-beanutils</artifactId>
-        <version>1.9.3</version>
+        <version>1.9.4</version>
       </dependency>
       <dependency>
         <groupId>org.apache.ivy</groupId>
@@ -589,7 +589,7 @@
       <dependency>
         <groupId>io.netty</groupId>
         <artifactId>netty-all</artifactId>
-        <version>4.1.39.Final</version>
+        <version>4.1.42.Final</version>
       </dependency>
       <dependency>
         <groupId>io.netty</groupId>

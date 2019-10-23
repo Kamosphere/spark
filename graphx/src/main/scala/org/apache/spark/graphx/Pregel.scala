@@ -144,6 +144,18 @@ object Pregel extends Logging {
     messageCheckpointer.update(messages.asInstanceOf[RDD[(VertexId, A)]])
     var activeMessages = messages.count()
 
+    val endTimeBeforeIter = System.nanoTime()
+
+    logInfo("-------------------------")
+    logInfo("First iteration time: " + (endTimeBeforeIter - startTime) +
+      ", next iter active node amount: " + activeMessages)
+    logInfo("-------------------------")
+
+    println("-------------------------")
+    println("First iteration time: " + (endTimeBeforeIter - startTime) +
+      ", next iter active node amount: " + activeMessages)
+    println("-------------------------")
+
     // Loop
     var prevG: Graph[VD, ED] = null
     var i = 0
@@ -181,6 +193,22 @@ object Pregel extends Logging {
         writer.close()
       })
       */
+/*
+      g.vertices.foreachPartition(iter => {
+        val pid = TaskContext.getPartitionId()
+        var temp : (VertexId, VD) = null
+
+        val writer = new PrintWriter(new File("/home/liqi/IdeaProjects/GraphXwithGPU/logSpark/" +
+          "testSparkVertexLog_pid" + pid + "_iter" + i + ".txt"))
+        while(iter.hasNext) {
+          temp = iter.next()
+          var chars = ""
+          chars = chars + " " + temp._1 + " : " + temp._2
+          writer.write("In iter " + i + " of part " + pid + " , vertex data: "
+            + chars + '\n')
+        }
+        writer.close()
+      })
 
       oldMessages.foreachPartition(iter => {
         val pid = TaskContext.getPartitionId()
@@ -197,7 +225,7 @@ object Pregel extends Logging {
         }
         writer.close()
       })
-
+*/
       messages = GraphXUtils.mapReduceTriplets(
         g, sendMsg, mergeMsg, Some((oldMessages, activeDirection)))
       // The call to count() materializes `messages` and the vertices of `g`. This hides oldMessages

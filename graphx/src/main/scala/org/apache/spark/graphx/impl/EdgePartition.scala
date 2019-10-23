@@ -17,13 +17,17 @@
 
 package org.apache.spark.graphx.impl
 
+import java.io.{File, PrintWriter}
+
 import scala.reflect.ClassTag
 
+import org.apache.spark.TaskContext
 import org.apache.spark.graphx._
 import org.apache.spark.graphx.util.collection.GraphXPrimitiveKeyOpenHashMap
 import org.apache.spark.graphx.util.collection.shmManager.shmArrayWriter
 import org.apache.spark.graphx.util.collection.shmManager.shmLineWriter.shmVertexWriter
 import org.apache.spark.graphx.util.collection.shmManager.shmNamePackager.{shmReaderPackager, shmWriterPackager}
+import org.apache.spark.internal.Logging
 import org.apache.spark.util.LongAccumulator
 import org.apache.spark.util.collection.BitSet
 
@@ -55,7 +59,7 @@ import org.apache.spark.util.collection.BitSet
  * @param vertexAttrs an array of vertex attributes where the offsets are local vertex ids
  * @param activeSet an optional active vertex set for filtering computation on the edges
  */
-private[graphx]
+// private[graphx]
 class EdgePartition[
     @specialized(Char, Int, Boolean, Byte, Long, Float, Double) ED: ClassTag, VD: ClassTag](
     localSrcIds: Array[Int],
@@ -66,7 +70,7 @@ class EdgePartition[
     local2global: Array[VertexId],
     vertexAttrs: Array[VD],
     activeSet: Option[VertexSet])
-  extends Serializable {
+  extends Serializable with Logging{
 
   /** No-arg constructor for serialization. */
   private def this() = this(null, null, null, null, null, null, null, null)
@@ -395,9 +399,16 @@ class EdgePartition[
     val aggregates = new Array[A](vertexAttrs.length)
     val bitset = new BitSet(vertexAttrs.length)
 
+    var sumSearchingTime: Long = 0
+    var sumCalculationTime: Long = 0
+    var sumWritingTime: Long = 0
+    var activatedEdge: Int = 0
+
     val ctx = new AggregatingEdgeContext[VD, ED, A](mergeMsg, aggregates, bitset)
     var i = 0
     while (i < size) {
+      val startTime = System.nanoTime()
+
       val localSrcId = localSrcIds(i)
       val srcId = local2global(localSrcId)
       val localDstId = localDstIds(i)
@@ -409,15 +420,61 @@ class EdgePartition[
         else if (activeness == EdgeActiveness.Both) isActive(srcId) && isActive(dstId)
         else if (activeness == EdgeActiveness.Either) isActive(srcId) || isActive(dstId)
         else throw new Exception("unreachable")
+      val endTime = System.nanoTime()
+      sumSearchingTime += (endTime - startTime)
+
       if (edgeIsActive) {
+        val startTime2 = System.nanoTime()
+        activatedEdge += 1
         val srcAttr = if (tripletFields.useSrc) vertexAttrs(localSrcId) else null.asInstanceOf[VD]
         val dstAttr = if (tripletFields.useDst) vertexAttrs(localDstId) else null.asInstanceOf[VD]
         ctx.set(srcId, dstId, localSrcId, localDstId, srcAttr, dstAttr, data(i))
+        val endTime2 = System.nanoTime()
+        val startTime3 = System.nanoTime()
         sendMsg(ctx)
+        val endTime3 = System.nanoTime()
+
+        sumWritingTime += (endTime2 - startTime2)
+        sumCalculationTime += (endTime3 - startTime3)
       }
       i += 1
     }
 
+    val pid = TaskContext.getPartitionId()
+    // scalastyle:off println
+    println("In partition " + pid +
+      ", (sumSearchingTime) Time for getting graph info from spark: " + sumSearchingTime)
+    println("In partition " + pid +
+      ", (sumWritingTime) Time for writing into array: " + sumWritingTime)
+    println("In partition " + pid +
+      ", (sumCalculationTime) Time for executing: " + sumCalculationTime)
+    println("In partition " + pid +
+      ", (activatedEdge) Amount of active edges: " + activatedEdge)
+    // scalastyle:on println
+
+    logInfo("In partition " + pid +
+      ", (sumSearchingTime) Time for getting graph info from spark: " + sumSearchingTime)
+    logInfo("In partition " + pid +
+      ", (sumWritingTime) Time for writing into array: " + sumWritingTime)
+    logInfo("In partition " + pid +
+      ", (sumCalculationTime) Time for executing: " + sumCalculationTime)
+    logInfo("In partition " + pid +
+      ", (activatedEdge) Amount of active edges: " + activatedEdge)
+/*
+    val pid = TaskContext.getPartitionId()
+    val writer = new PrintWriter(new File(
+      "/home/liqi/IdeaProjects/GraphXwithGPU/logSpark/" +
+        "testSparkPartitionResultLog_pid" + pid + "_" + System.nanoTime() + ".txt"))
+    val iter = bitset.iterator
+    while(iter.hasNext) {
+      val temp = iter.next()
+      var chars = ""
+      chars = chars + " " + local2global(temp) + " : " + aggregates(temp)
+      writer.write("In part " + pid + " , result data: "
+        + chars + '\n')
+    }
+    writer.close()
+*/
     bitset.iterator.map { localId => (local2global(localId), aggregates(localId)) }
   }
 
@@ -440,8 +497,15 @@ class EdgePartition[
     val aggregates = new Array[A](vertexAttrs.length)
     val bitset = new BitSet(vertexAttrs.length)
 
+    var sumSearchingTime: Long = 0
+    var sumWritingTime : Long = 0
+    var sumCalculationTime: Long = 0
+    var activatedEdge: Int = 0
+
     val ctx = new AggregatingEdgeContext[VD, ED, A](mergeMsg, aggregates, bitset)
     index.iterator.foreach { cluster =>
+      val startTime = System.nanoTime()
+
       val clusterSrcId = cluster._1
       val clusterPos = cluster._2
       val clusterLocalSrcId = localSrcIds(clusterPos)
@@ -454,12 +518,21 @@ class EdgePartition[
         else if (activeness == EdgeActiveness.Either) true
         else throw new Exception("unreachable")
 
+      val endTime = System.nanoTime()
+      sumSearchingTime += (endTime - startTime)
       if (scanCluster) {
+        val startTime2 = System.nanoTime()
         var pos = clusterPos
         val srcAttr =
           if (tripletFields.useSrc) vertexAttrs(clusterLocalSrcId) else null.asInstanceOf[VD]
+        val endTime2 = System.nanoTime()
+        val startTimeWrite = System.nanoTime()
         ctx.setSrcOnly(clusterSrcId, clusterLocalSrcId, srcAttr)
+        val endTimeWrite = System.nanoTime()
+        sumWritingTime += (endTimeWrite - startTimeWrite)
+        sumSearchingTime += (endTime2 - startTime2)
         while (pos < size && localSrcIds(pos) == clusterLocalSrcId) {
+          val startTime3 = System.nanoTime()
           val localDstId = localDstIds(pos)
           val dstId = local2global(localDstId)
           val edgeIsActive =
@@ -469,17 +542,63 @@ class EdgePartition[
             else if (activeness == EdgeActiveness.Both) isActive(dstId)
             else if (activeness == EdgeActiveness.Either) isActive(clusterSrcId) || isActive(dstId)
             else throw new Exception("unreachable")
+          val endTime3 = System.nanoTime()
+          sumSearchingTime += (endTime3 - startTime3)
           if (edgeIsActive) {
+            val startTimeWrite2 = System.nanoTime()
+            activatedEdge += 1
+
             val dstAttr =
               if (tripletFields.useDst) vertexAttrs(localDstId) else null.asInstanceOf[VD]
             ctx.setRest(dstId, localDstId, dstAttr, data(pos))
+            val endTimeWrite2 = System.nanoTime()
+            sumWritingTime += (endTimeWrite2 - startTimeWrite2)
+
+            val startTime4 = System.nanoTime()
             sendMsg(ctx)
+            val endTime4 = System.nanoTime()
+            sumCalculationTime += (endTime4 - startTime4)
           }
           pos += 1
         }
       }
     }
 
+    val pid = TaskContext.getPartitionId()
+    // scalastyle:off println
+    println("In partition " + pid +
+      ", (sumSearchingTime) Time for getting graph info from spark: " + sumSearchingTime)
+    println("In partition " + pid +
+      ", (sumWritingTime) Time for writing into array: " + sumWritingTime)
+    println("In partition " + pid +
+      ", (sumCalculationTime) Time for executing: " + sumCalculationTime)
+    println("In partition " + pid +
+      ", (activatedEdge) Amount of active edges: " + activatedEdge)
+    // scalastyle:on println
+
+    logInfo("In partition " + pid +
+      ", (sumSearchingTime) Time for getting graph info from spark: " + sumSearchingTime)
+    logInfo("In partition " + pid +
+      ", (sumWritingTime) Time for writing into array: " + sumWritingTime)
+    logInfo("In partition " + pid +
+      ", (sumCalculationTime) Time for executing: " + sumCalculationTime)
+    logInfo("In partition " + pid +
+      ", (activatedEdge) Amount of active edges: " + activatedEdge)
+/*
+    val pid = TaskContext.getPartitionId()
+    val writer = new PrintWriter(new File(
+      "/home/liqi/IdeaProjects/GraphXwithGPU/logSpark/" +
+      "testSparkPartitionResultLog_pid" + pid + "_" + System.nanoTime() + ".txt"))
+    val iter = bitset.iterator
+    while(iter.hasNext) {
+      val temp = iter.next()
+      var chars = ""
+      chars = chars + " " + local2global(temp) + " : " + aggregates(temp)
+      writer.write("In part " + pid + " , result data: "
+        + chars + '\n')
+    }
+    writer.close()
+*/
     bitset.iterator.map { localId => (local2global(localId), aggregates(localId)) }
   }
 
@@ -665,12 +784,17 @@ class EdgePartition[
    tripletFields: TripletFields,
    activeness: EdgeActiveness): Iterator[(VertexId, A)] = {
 
+    var sumSearchingTime: Long = 0
+    var sumWritingTime: Long = 0
+
     val writerLineTest = new shmVertexWriter[VD](
       identifierArr, pid, shmInitFunc, shmWriteFunc)
     val filterBitSet = new BitSet(vertexAttrs.length)
 
     var i = 0
     while (i < size) {
+      val startTime = System.nanoTime()
+
       val localSrcId = localSrcIds(i)
       val srcId = local2global(localSrcId)
       val localDstId = localDstIds(i)
@@ -682,7 +806,12 @@ class EdgePartition[
         else if (activeness == EdgeActiveness.Both) isActive(srcId) && isActive(dstId)
         else if (activeness == EdgeActiveness.Either) isActive(srcId) || isActive(dstId)
         else throw new Exception("unreachable")
+
+      val endTime = System.nanoTime()
+      sumSearchingTime += (endTime - startTime)
+
       if (edgeIsActive) {
+        val startTime2 = System.nanoTime()
         val srcAttr = if (tripletFields.useSrc) vertexAttrs(localSrcId) else null.asInstanceOf[VD]
         val dstAttr = if (tripletFields.useDst) vertexAttrs(localDstId) else null.asInstanceOf[VD]
 
@@ -703,10 +832,14 @@ class EdgePartition[
           writerLineTest.input(dstId, dstActive, dstAttr)
           filterBitSet.set(localDstId)
         }
+        val endTime2 = System.nanoTime()
+        sumWritingTime += (endTime2 - startTime2)
 
       }
       i += 1
     }
+
+    val startTime2 = System.nanoTime()
     // Input array is a linear shm-like array
     // Output array should be a skipped array
     val (resultBitSet, resultSortedAgg, needCombine) =
@@ -717,6 +850,40 @@ class EdgePartition[
       counter.add(1)
     }
 
+    val endTime2 = System.nanoTime()
+
+    // scalastyle:off println
+    println("In partition " + pid +
+      ", (sumSearchingTime) Time for getting graph info from spark: " + sumSearchingTime)
+    println("In partition " + pid +
+      ", (sumWritingTime) Time for writing into shm: " + sumWritingTime)
+    println("In partition " + pid +
+      ", (sumCalculationTime) Time for executing and packaging from GPU env: "
+      + (endTime2 - startTime2))
+    // scalastyle:on println
+
+    logInfo("In partition " + pid +
+      ", (sumSearchingTime) Time for getting graph info from spark: " + sumSearchingTime)
+    logInfo("In partition " + pid +
+      ", (sumWritingTime) Time for writing into shm: " + sumWritingTime)
+    logInfo("In partition " + pid +
+      ", (sumCalculationTime) Time for executing and packaging from GPU env: "
+      + (endTime2 - startTime2))
+
+/*
+    val writer = new PrintWriter(new File(
+      "/home/liqi/IdeaProjects/GraphXwithGPU/logGPUShm/" +
+        "testGPUPartitionResultLog_pid" + pid + "_" + System.nanoTime() + ".txt"))
+    val iter = resultBitSet.iterator
+    while(iter.hasNext) {
+      val temp = iter.next()
+      var chars = ""
+      chars = chars + " " + local2global(temp) + " : " + resultSortedAgg(temp)
+      writer.write("In part " + pid + " , result data: "
+        + chars + '\n')
+    }
+    writer.close()
+*/
     resultBitSet.iterator.map { localId => (local2global(localId), resultSortedAgg(localId)) }
   }
 
@@ -738,11 +905,16 @@ class EdgePartition[
    tripletFields: TripletFields,
    activeness: EdgeActiveness): Iterator[(VertexId, A)] = {
 
+    var sumSearchingTime: Long = 0
+    var sumWritingTime: Long = 0
+
     val writerLineTest = new shmVertexWriter[VD](
       identifierArr, pid, shmInitFunc, shmWriteFunc)
     val filterBitSet = new BitSet(vertexAttrs.length)
 
     index.iterator.foreach { cluster =>
+      val startTime = System.nanoTime()
+
       val clusterSrcId = cluster._1
       val clusterPos = cluster._2
       val clusterLocalSrcId = localSrcIds(clusterPos)
@@ -755,7 +927,11 @@ class EdgePartition[
         else if (activeness == EdgeActiveness.Either) true
         else throw new Exception("unreachable")
 
+      val endTime = System.nanoTime()
+      sumSearchingTime += (endTime - startTime)
+
       if (scanCluster) {
+        val startTime2 = System.nanoTime()
         var pos = clusterPos
         val srcAttr =
           if (tripletFields.useSrc) vertexAttrs(clusterLocalSrcId) else null.asInstanceOf[VD]
@@ -764,8 +940,11 @@ class EdgePartition[
           writerLineTest.input(clusterSrcId, isActive(clusterSrcId), srcAttr)
           filterBitSet.set(clusterLocalSrcId)
         }
+        val endTime2 = System.nanoTime()
+        sumWritingTime += (endTime2 - startTime2)
 
         while (pos < size && localSrcIds(pos) == clusterLocalSrcId) {
+          val startTime3 = System.nanoTime()
           val localDstId = localDstIds(pos)
           val dstId = local2global(localDstId)
           val edgeIsActive =
@@ -775,7 +954,10 @@ class EdgePartition[
             else if (activeness == EdgeActiveness.Both) isActive(dstId)
             else if (activeness == EdgeActiveness.Either) isActive(clusterSrcId) || isActive(dstId)
             else throw new Exception("unreachable")
+          val endTime3 = System.nanoTime()
+          sumSearchingTime += (endTime3 - startTime3)
           if (edgeIsActive) {
+            val startTime4 = System.nanoTime()
             val dstAttr =
               if (tripletFields.useDst) vertexAttrs(localDstId) else null.asInstanceOf[VD]
 
@@ -783,12 +965,15 @@ class EdgePartition[
               writerLineTest.input(dstId, isActive(dstId), dstAttr)
               filterBitSet.set(localDstId)
             }
-
+            val endTime4 = System.nanoTime()
+            sumWritingTime += (endTime4 - startTime4)
           }
           pos += 1
         }
       }
     }
+    val startTime2 = System.nanoTime()
+
     // Input array is a linear shm-like array
     // Output array should be a skipped array
     val (resultBitSet, resultSortedAgg, needCombine) =
@@ -799,6 +984,40 @@ class EdgePartition[
       counter.add(1)
     }
 
+    val endTime2 = System.nanoTime()
+
+    // scalastyle:off println
+    println("In partition " + pid +
+      ", (sumSearchingTime) Time for getting graph info from spark: " + sumSearchingTime)
+    println("In partition " + pid +
+      ", (sumWritingTime) Time for writing into shm: " + sumWritingTime)
+    println("In partition " + pid +
+      ", (sumCalculationTime) Time for executing and packaging from GPU env: "
+      + (endTime2 - startTime2))
+    // scalastyle:on println
+
+    logInfo("In partition " + pid +
+      ", (sumSearchingTime) Time for getting graph info from spark: " + sumSearchingTime)
+    logInfo("In partition " + pid +
+      ", (sumWritingTime) Time for writing into shm: " + sumWritingTime)
+    logInfo("In partition " + pid +
+      ", (sumCalculationTime) Time for executing and packaging from GPU env: "
+      + (endTime2 - startTime2))
+
+/*
+    val writer = new PrintWriter(new File(
+      "/home/liqi/IdeaProjects/GraphXwithGPU/logGPUShm/" +
+        "testGPUPartitionResultLog_pid" + pid + "_" + System.nanoTime() + ".txt"))
+    val iter = resultBitSet.iterator
+    while(iter.hasNext) {
+      val temp = iter.next()
+      var chars = ""
+      chars = chars + " " + local2global(temp) + " : " + resultSortedAgg(temp)
+      writer.write("In part " + pid + " , result data: "
+        + chars + '\n')
+    }
+    writer.close()
+*/
     resultBitSet.iterator.map { localId => (local2global(localId), resultSortedAgg(localId)) }
   }
 
@@ -853,11 +1072,24 @@ class EdgePartition[
    gpuBridgeFunc: (Int, GraphXPrimitiveKeyOpenHashMap[VertexId, Int])
      => (BitSet, Array[A], Boolean)): Iterator[(VertexId, A)] = {
 
+    val startTime2 = System.nanoTime()
+
     val (resultBitSet, resultSortedAgg, needCombine) = gpuBridgeFunc(pid, global2local)
 
     if(needCombine) {
       counter.add(1)
     }
+
+    val endTime2 = System.nanoTime()
+    // scalastyle:off println
+    println("In skipped partition " + pid +
+      ", (sumCalculationTime) Time for executing and packaging from GPU env: "
+      + (endTime2 - startTime2))
+    // scalastyle:on println
+
+    logInfo("In skipped partition " + pid +
+      ", (sumCalculationTime) Time for executing and packaging from GPU env: "
+      + (endTime2 - startTime2))
 
     resultBitSet.iterator.map { localId => (local2global(localId), resultSortedAgg(localId)) }
   }
@@ -867,7 +1099,19 @@ class EdgePartition[
    gpuBridgeFunc: (Int, GraphXPrimitiveKeyOpenHashMap[VertexId, Int])
      => (BitSet, Array[A], Boolean)): Iterator[(VertexId, A)] = {
 
+    val startTime2 = System.nanoTime()
+
     val (resultBitSet, resultSortedAgg, needCombine) = gpuBridgeFunc(pid, global2local)
+
+    val endTime2 = System.nanoTime()
+
+    // scalastyle:off println
+    logInfo("In final partition " + pid +
+      ", Time for executing and packaging from GPU env: " + (endTime2 - startTime2))
+    // scalastyle:on println
+
+    logInfo("In final partition " + pid +
+      ", Time for executing and packaging from GPU env: " + (endTime2 - startTime2))
 
     resultBitSet.iterator.map { localId => (local2global(localId), resultSortedAgg(localId)) }
   }

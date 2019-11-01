@@ -24,6 +24,7 @@ import org.apache.spark.graphx.impl._
 import org.apache.spark.graphx.util.collection.GraphXPrimitiveKeyOpenHashMap
 import org.apache.spark.graphx.util.collection.shmManager._
 import org.apache.spark.graphx.util.collection.shmManager.shmNamePackager.shmWriterPackager
+import org.apache.spark.rdd.RDD
 import org.apache.spark.util.{BoundedPriorityQueue, LongAccumulator}
 import org.apache.spark.util.collection.{BitSet, OpenHashSet}
 
@@ -87,6 +88,41 @@ object GraphXUtils {
       TripletFields.All, activeSetOpt)
   }
 
+  def mapReduceTripletsIntoGPUSkip_normal[VD: ClassTag, ED: ClassTag]
+  (g: Graph[VD, ED],
+   gpuBridgeFunc: (Int, Array[VertexId], Array[Boolean], Array[VD])
+     => (Boolean, Int),
+   activeSetOpt: Option[(VertexRDD[_], EdgeDirection)] = None):
+  RDD[(PartitionID, (Boolean, Int))] = {
+    g.aggregateIntoGPUSkipWithActiveSet(gpuBridgeFunc,
+      TripletFields.All, activeSetOpt)
+  }
+
+  def mapReduceTripletsIntoGPUSkip_fetch[VD: ClassTag, ED: ClassTag, A: ClassTag]
+  (g: Graph[VD, ED],
+   gpuBridgeFunc: Int
+     => (Array[VertexId], Array[A]),
+   globalReduceFunc: (A, A) => A):
+  VertexRDD[A] = {
+    g.aggregateIntoGPUSkipFetch(gpuBridgeFunc, globalReduceFunc)
+  }
+
+  def mapReduceTripletsIntoGPUSkip_skipping[VD: ClassTag, ED: ClassTag]
+  (g: Graph[VD, ED], iterTimes: Int,
+   gpuBridgeFunc: (Int, Int) => (Boolean, Int)):
+  RDD[(PartitionID, (Boolean, Int))] = {
+    g.aggregateIntoGPUSkipStep(gpuBridgeFunc, iterTimes)
+  }
+
+  def mapReduceTripletsIntoGPUSkip_fetchOldMsg[VD: ClassTag, ED: ClassTag, A: ClassTag]
+  (g: Graph[VD, ED],
+   gpuBridgeFunc: Int
+     => (Array[VertexId], Array[Boolean], Array[Int], Array[A]),
+   globalReduceFunc: ((Boolean, Int, A), (Boolean, Int, A)) => (Boolean, Int, A)):
+  VertexRDD[(Boolean, Int, A)] = {
+    g.aggregateIntoGPUSkipFetchOldMsg(gpuBridgeFunc, globalReduceFunc)
+  }
+
   def mapReduceTripletsIntoGPUInShm[VD: ClassTag, ED: ClassTag, A: ClassTag]
   (g: Graph[VD, ED], counter: LongAccumulator,
    identifierArr: Array[String],
@@ -100,24 +136,6 @@ object GraphXUtils {
     g.aggregateIntoGPUShmWithActiveSet(counter, identifierArr,
       shmInitFunc, shmWriteFunc, gpuBridgeFunc, globalReduceFunc,
       TripletFields.All, activeSetOpt)
-  }
-
-  def mapReduceTripletsIntoGPU_Skipping[VD: ClassTag, ED: ClassTag, A: ClassTag]
-  (g: Graph[VD, ED], counter: LongAccumulator,
-   gpuBridgeFunc: Int
-     => (Array[VertexId], Array[A], Boolean),
-   globalReduceFunc: (A, A) => A):
-  VertexRDD[A] = {
-    g.aggregateIntoGPUSkipping(counter, gpuBridgeFunc, globalReduceFunc)
-  }
-
-  def mapReduceTripletsIntoGPU_FinalCollect[VD: ClassTag, ED: ClassTag, A: ClassTag]
-  (g: Graph[VD, ED],
-   gpuBridgeFunc: Int
-     => (Array[VertexId], Array[A], Boolean),
-   globalReduceFunc: (A, A) => A):
-  VertexRDD[A] = {
-    g.aggregateIntoGPUFinalCollect(gpuBridgeFunc, globalReduceFunc)
   }
 
   def mapReduceTripletsIntoGPU_SkippingInShm[VD: ClassTag, ED: ClassTag, A: ClassTag]

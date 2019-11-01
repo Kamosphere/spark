@@ -391,6 +391,26 @@ abstract class Graph[VD: ClassTag, ED: ClassTag] protected () extends Serializab
    tripletFields: TripletFields,
    activeSetOpt: Option[(VertexRDD[_], EdgeDirection)]): VertexRDD[A]
 
+  def aggregateIntoGPUSkipWithActiveSet
+  (gpuBridgeFunc: (Int, Array[VertexId], Array[Boolean], Array[VD])
+     => (Boolean, Int),
+   tripletFields: TripletFields,
+   activeSetOpt: Option[(VertexRDD[_], EdgeDirection)]): RDD[(PartitionID, (Boolean, Int))]
+
+  def aggregateIntoGPUSkipFetch[A: ClassTag]
+  (gpuBridgeFunc: Int
+    => (Array[VertexId], Array[A]),
+   globalReduceFunc: (A, A) => A): VertexRDD[A]
+
+  def aggregateIntoGPUSkipFetchOldMsg[A: ClassTag]
+  (gpuBridgeFunc: Int
+    => (Array[VertexId], Array[Boolean], Array[Int], Array[A]),
+   globalReduceFunc: ((Boolean, Int, A), (Boolean, Int, A)) => (Boolean, Int, A)):
+  VertexRDD[(Boolean, Int, A)]
+
+  def aggregateIntoGPUSkipStep
+  (gpuBridgeFunc: (Int, Int) => (Boolean, Int), iterTimes: Int): RDD[(PartitionID, (Boolean, Int))]
+
   def aggregateIntoGPUShmWithActiveSet[A: ClassTag]
   (counter: LongAccumulator, identifierArr: Array[String],
    shmInitFunc: (Array[String], Int) => (Array[shmArrayWriter], shmWriterPackager),
@@ -400,17 +420,6 @@ abstract class Graph[VD: ClassTag, ED: ClassTag] protected () extends Serializab
    globalReduceFunc: (A, A) => A,
    tripletFields: TripletFields,
    activeSetOpt: Option[(VertexRDD[_], EdgeDirection)]): VertexRDD[A]
-
-  def aggregateIntoGPUSkipping[A: ClassTag]
-  (counter: LongAccumulator,
-   gpuBridgeFunc: Int
-     => (Array[VertexId], Array[A], Boolean),
-   globalReduceFunc: (A, A) => A): VertexRDD[A]
-
-  def aggregateIntoGPUFinalCollect[A: ClassTag]
-  (gpuBridgeFunc: Int
-    => (Array[VertexId], Array[A], Boolean),
-   globalReduceFunc: (A, A) => A): VertexRDD[A]
 
   def aggregateIntoGPUSkippingInShm[A: ClassTag]
   (counter: LongAccumulator,

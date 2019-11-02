@@ -263,6 +263,10 @@ class GraphImpl[VD: ClassTag, ED: ClassTag] protected (
     vertices.aggregateUsingIndex(preAgg, mergeMsg)
   }
 
+  // ///////////////////////////////////////////////////////////////////////////////////////////////
+  // Modified transformation methods for GPU
+  // ///////////////////////////////////////////////////////////////////////////////////////////////
+
   override def aggregateIntoGPUWithActiveSet[A: ClassTag]
   (counter: LongAccumulator,
    gpuBridgeFunc: (Int, Array[VertexId], Array[Boolean], Array[VD])
@@ -418,9 +422,9 @@ class GraphImpl[VD: ClassTag, ED: ClassTag] protected (
         iterResult = edgePartition.aggregateIntoGPUSkipFetch(pid, gpuBridgeFunc)
         val endTime = System.nanoTime()
         // scalastyle:off println
-        logInfo("In part " + pid + ", in skipping time: "
+        logInfo("In part " + pid + ", in fetching time: "
           + (endTime - startTime) )
-        println("In part " + pid + ", in skipping time: "
+        println("In part " + pid + ", in fetching time: "
           + (endTime - startTime) )
         // scalastyle:on println
         iterResult
@@ -447,9 +451,9 @@ class GraphImpl[VD: ClassTag, ED: ClassTag] protected (
         iterResult = edgePartition.aggregateIntoGPUSkipFetchOldMsg(pid, gpuBridgeFunc)
         val endTime = System.nanoTime()
         // scalastyle:off println
-        logInfo("In part " + pid + ", in skipping time: "
+        logInfo("In part " + pid + ", in fetching old time: "
           + (endTime - startTime) )
-        println("In part " + pid + ", in skipping time: "
+        println("In part " + pid + ", in fetching old time: "
           + (endTime - startTime) )
         // scalastyle:on println
         iterResult

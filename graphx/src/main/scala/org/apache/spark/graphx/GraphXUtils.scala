@@ -107,13 +107,6 @@ object GraphXUtils {
     g.aggregateIntoGPUSkipFetch(gpuBridgeFunc, globalReduceFunc)
   }
 
-  def mapReduceTripletsIntoGPUSkip_skipping[VD: ClassTag, ED: ClassTag]
-  (g: Graph[VD, ED], iterTimes: Int,
-   gpuBridgeFunc: (Int, Int) => (Boolean, Int)):
-  RDD[(PartitionID, (Boolean, Int))] = {
-    g.aggregateIntoGPUSkipStep(gpuBridgeFunc, iterTimes)
-  }
-
   def mapReduceTripletsIntoGPUSkip_fetchOldMsg[VD: ClassTag, ED: ClassTag, A: ClassTag]
   (g: Graph[VD, ED],
    gpuBridgeFunc: Int
@@ -121,6 +114,13 @@ object GraphXUtils {
    globalReduceFunc: ((Boolean, Int, A), (Boolean, Int, A)) => (Boolean, Int, A)):
   VertexRDD[(Boolean, Int, A)] = {
     g.aggregateIntoGPUSkipFetchOldMsg(gpuBridgeFunc, globalReduceFunc)
+  }
+
+  def mapReduceTripletsIntoGPUSkip_skipping[VD: ClassTag, ED: ClassTag]
+  (g: Graph[VD, ED], iterTimes: Int,
+   gpuBridgeFunc: (Int, Int) => (Boolean, Int)):
+  RDD[(PartitionID, (Boolean, Int))] = {
+    g.aggregateIntoGPUSkipStep(gpuBridgeFunc, iterTimes)
   }
 
   def mapReduceTripletsIntoGPUInShm[VD: ClassTag, ED: ClassTag, A: ClassTag]

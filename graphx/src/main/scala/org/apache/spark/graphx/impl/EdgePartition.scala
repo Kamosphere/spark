@@ -441,6 +441,8 @@ class EdgePartition[
     }
 
     val pid = TaskContext.getPartitionId()
+
+    /*
     // scalastyle:off println
     println("In partition " + pid +
       ", (sumSearchingTime) Time for getting graph info from spark: " + sumSearchingTime)
@@ -451,6 +453,8 @@ class EdgePartition[
     println("In partition " + pid +
       ", (activatedEdge) Amount of active edges: " + activatedEdge)
     // scalastyle:on println
+
+     */
 
     logInfo("In partition " + pid +
       ", (sumSearchingTime) Time for getting graph info from spark: " + sumSearchingTime)
@@ -504,6 +508,7 @@ class EdgePartition[
 
     val ctx = new AggregatingEdgeContext[VD, ED, A](mergeMsg, aggregates, bitset)
     index.iterator.foreach { cluster =>
+
       val startTime = System.nanoTime()
 
       val clusterSrcId = cluster._1
@@ -520,19 +525,26 @@ class EdgePartition[
 
       val endTime = System.nanoTime()
       sumSearchingTime += (endTime - startTime)
+
       if (scanCluster) {
+
         val startTime2 = System.nanoTime()
+
         var pos = clusterPos
         val srcAttr =
           if (tripletFields.useSrc) vertexAttrs(clusterLocalSrcId) else null.asInstanceOf[VD]
+
         val endTime2 = System.nanoTime()
         val startTimeWrite = System.nanoTime()
+
         ctx.setSrcOnly(clusterSrcId, clusterLocalSrcId, srcAttr)
         val endTimeWrite = System.nanoTime()
         sumWritingTime += (endTimeWrite - startTimeWrite)
         sumSearchingTime += (endTime2 - startTime2)
         while (pos < size && localSrcIds(pos) == clusterLocalSrcId) {
+
           val startTime3 = System.nanoTime()
+
           val localDstId = localDstIds(pos)
           val dstId = local2global(localDstId)
           val edgeIsActive =
@@ -542,20 +554,26 @@ class EdgePartition[
             else if (activeness == EdgeActiveness.Both) isActive(dstId)
             else if (activeness == EdgeActiveness.Either) isActive(clusterSrcId) || isActive(dstId)
             else throw new Exception("unreachable")
+
           val endTime3 = System.nanoTime()
           sumSearchingTime += (endTime3 - startTime3)
+
           if (edgeIsActive) {
+
             val startTimeWrite2 = System.nanoTime()
             activatedEdge += 1
 
             val dstAttr =
               if (tripletFields.useDst) vertexAttrs(localDstId) else null.asInstanceOf[VD]
             ctx.setRest(dstId, localDstId, dstAttr, data(pos))
+
             val endTimeWrite2 = System.nanoTime()
             sumWritingTime += (endTimeWrite2 - startTimeWrite2)
 
             val startTime4 = System.nanoTime()
+
             sendMsg(ctx)
+
             val endTime4 = System.nanoTime()
             sumCalculationTime += (endTime4 - startTime4)
           }
@@ -565,6 +583,8 @@ class EdgePartition[
     }
 
     val pid = TaskContext.getPartitionId()
+
+    /*
     // scalastyle:off println
     println("In partition " + pid +
       ", (sumSearchingTime) Time for getting graph info from spark: " + sumSearchingTime)
@@ -575,6 +595,8 @@ class EdgePartition[
     println("In partition " + pid +
       ", (activatedEdge) Amount of active edges: " + activatedEdge)
     // scalastyle:on println
+
+     */
 
     logInfo("In partition " + pid +
       ", (sumSearchingTime) Time for getting graph info from spark: " + sumSearchingTime)
@@ -604,9 +626,12 @@ class EdgePartition[
 
   // Old GPU array init with incomplete skip
   /**
-   * Send nothing along edges and aggregate them at the receiving vertices. Implemented by scanning
-   * all edges sequentially.
+   * Send messages along edges and aggregate them at the receiving vertices. Implemented by scanning
+   * all edges sequentially, then copy the related vertices into GPU environment in array form.
    *
+   * @param pid for the partition ID
+   * @param counter for skipping steps, will be removed in the future
+   * @param gpuBridgeFunc which execute the message generate function in GPU using related vertices
    * @param tripletFields which triplet fields `sendMsg` uses
    * @param activeness criteria for filtering edges based on activeness
    *
@@ -681,10 +706,14 @@ class EdgePartition[
   }
 
   /**
-   * Send nothing along edges and aggregate them at the receiving vertices. Implemented by
-   * filtering the source vertex index, then scanning each edge cluster.
+   * Send messages along edges and aggregate them at the receiving vertices. Implemented by
+   * filtering the source vertex index, then scanning each edge cluster, then
+   * copy the related vertices into GPU environment in array form.
    *
-   * @param tripletFields which triplet fields uses
+   * @param pid for the partition ID
+   * @param counter for skipping steps, will be removed in the future
+   * @param gpuBridgeFunc which execute the message generate function in GPU using related vertices
+   * @param tripletFields which triplet fields `sendMsg` uses
    * @param activeness criteria for filtering edges based on activeness
    *
    * @return iterator aggregated messages keyed by the receiving vertex id
@@ -767,6 +796,19 @@ class EdgePartition[
     bitSet.iterator.map { localId => (local2global(localId), sortedAggregates(localId)) }
   }
 
+  /**
+   * Send messages along edges and aggregate them at the receiving vertices. Implemented by scanning
+   * all edges sequentially, then copy the related vertices into GPU environment in array form.
+   * Used in step skipping.
+   *
+   * @param pid for the partition ID
+   * @param gpuBridgeFunc which execute the message generate function in GPU using related vertices
+   * @param tripletFields which triplet fields `sendMsg` uses
+   * @param activeness criteria for filtering edges based on activeness
+   *
+   * @return partition status if could execute step skipping
+   *         and active vertices number in partition scope
+   */
   // GPU array init with complete skip
   def aggregateIntoGPUSkipEdgeScan
   (pid: Int,
@@ -782,8 +824,14 @@ class EdgePartition[
       globalVertexId(i) = -1L
     }
 
+    var sumSearchingTime: Long = 0
+    var sumWritingTime: Long = 0
+
     var i = 0
     while (i < size) {
+
+      val startTime = System.nanoTime()
+
       val localSrcId = localSrcIds(i)
       val srcId = local2global(localSrcId)
       val localDstId = localDstIds(i)
@@ -795,9 +843,17 @@ class EdgePartition[
         else if (activeness == EdgeActiveness.Both) isActive(srcId) && isActive(dstId)
         else if (activeness == EdgeActiveness.Either) isActive(srcId) || isActive(dstId)
         else throw new Exception("unreachable")
+
+      val endTime = System.nanoTime()
+      sumSearchingTime += (endTime - startTime)
+
       if (edgeIsActive) {
+
+        val startTime2 = System.nanoTime()
+
         val srcAttr = if (tripletFields.useSrc) vertexAttrs(localSrcId) else null.asInstanceOf[VD]
         val dstAttr = if (tripletFields.useDst) vertexAttrs(localDstId) else null.asInstanceOf[VD]
+
         aggregates(localSrcId) = srcAttr
         aggregates(localDstId) = dstAttr
         if(activeSet.isEmpty) {
@@ -810,15 +866,57 @@ class EdgePartition[
         }
         globalVertexId(localSrcId) = srcId
         globalVertexId(localDstId) = dstId
+
+        val endTime2 = System.nanoTime()
+        sumWritingTime += (endTime2 - startTime2)
       }
       i += 1
     }
 
+    val startTime2 = System.nanoTime()
+
     val (needMerge, activeCount) = gpuBridgeFunc(pid, globalVertexId, activeStatus, aggregates)
+
+    val endTime2 = System.nanoTime()
+
+    /*
+    // scalastyle:off println
+    println("In partition " + pid +
+      ", (sumSearchingTime) Time for getting graph info from spark: " + sumSearchingTime)
+    println("In partition " + pid +
+      ", (sumWritingTime) Time for writing into arr: " + sumWritingTime)
+    println("In partition " + pid +
+      ", (sumCalculationTime) Time for executing and packaging from GPU env: "
+      + (endTime2 - startTime2))
+    // scalastyle:on println
+
+     */
+
+    logInfo("In partition " + pid +
+      ", (sumSearchingTime) Time for getting graph info from spark: " + sumSearchingTime)
+    logInfo("In partition " + pid +
+      ", (sumWritingTime) Time for writing into arr: " + sumWritingTime)
+    logInfo("In partition " + pid +
+      ", (sumCalculationTime) Time for executing and packaging from GPU env: "
+      + (endTime2 - startTime2))
+
     Iterator((pid, (needMerge, activeCount)))
 
   }
 
+  /**
+   * Send messages along edges and aggregate them at the receiving vertices. Implemented by
+   * filtering the source vertex index, then scanning each edge cluster, then
+   * copy the related vertices into GPU environment in array form. Used in step skipping.
+   *
+   * @param pid for the partition ID
+   * @param gpuBridgeFunc which execute the message generate function in GPU using related vertices
+   * @param tripletFields which triplet fields `sendMsg` uses
+   * @param activeness criteria for filtering edges based on activeness
+   *
+   * @return partition status if could execute step skipping
+   *         and active vertices number in partition scope
+   */
   def aggregateIntoGPUSkipIndexScan
   (pid: Int,
    gpuBridgeFunc: (Int, Array[VertexId], Array[Boolean], Array[VD])
@@ -833,7 +931,13 @@ class EdgePartition[
       globalVertexId(i) = -1L
     }
 
+    var sumSearchingTime: Long = 0
+    var sumWritingTime: Long = 0
+
     index.iterator.foreach { cluster =>
+
+      val startTime = System.nanoTime()
+
       val clusterSrcId = cluster._1
       val clusterPos = cluster._2
       val clusterLocalSrcId = localSrcIds(clusterPos)
@@ -846,14 +950,28 @@ class EdgePartition[
         else if (activeness == EdgeActiveness.Either) true
         else throw new Exception("unreachable")
 
+      val endTime = System.nanoTime()
+      sumSearchingTime += (endTime - startTime)
+
       if (scanCluster) {
+
+        val startTime2 = System.nanoTime()
+
         var pos = clusterPos
         val srcAttr =
           if (tripletFields.useSrc) vertexAttrs(clusterLocalSrcId) else null.asInstanceOf[VD]
+
         aggregates(clusterLocalSrcId) = srcAttr
         activeStatus(clusterLocalSrcId) = isActive(clusterSrcId)
         globalVertexId(clusterLocalSrcId) = clusterSrcId
+
+        val endTime2 = System.nanoTime()
+        sumWritingTime += (endTime2 - startTime2)
+
         while (pos < size && localSrcIds(pos) == clusterLocalSrcId) {
+
+          val startTime3 = System.nanoTime()
+
           val localDstId = localDstIds(pos)
           val dstId = local2global(localDstId)
           val edgeIsActive =
@@ -863,29 +981,74 @@ class EdgePartition[
             else if (activeness == EdgeActiveness.Both) isActive(dstId)
             else if (activeness == EdgeActiveness.Either) isActive(clusterSrcId) || isActive(dstId)
             else throw new Exception("unreachable")
+
+          val endTime3 = System.nanoTime()
+          sumSearchingTime += (endTime3 - startTime3)
+
           if (edgeIsActive) {
+
+            val startTime4 = System.nanoTime()
+
             val dstAttr =
               if (tripletFields.useDst) vertexAttrs(localDstId) else null.asInstanceOf[VD]
             aggregates(localDstId) = dstAttr
             activeStatus(localDstId) = isActive(dstId)
             globalVertexId(localDstId) = dstId
+
+            val endTime4 = System.nanoTime()
+            sumWritingTime += (endTime4 - startTime4)
           }
           pos += 1
         }
       }
     }
+
+    val startTime2 = System.nanoTime()
     // Input array is a skipped array
     // Output array should be a linear array
     val (needMerge, activeCount) =
     gpuBridgeFunc(pid, globalVertexId, activeStatus, aggregates)
 
+    val endTime2 = System.nanoTime()
+
+    /*
+    // scalastyle:off println
+    println("In partition " + pid +
+      ", (sumSearchingTime) Time for getting graph info from spark: " + sumSearchingTime)
+    println("In partition " + pid +
+      ", (sumWritingTime) Time for writing into arr: " + sumWritingTime)
+    println("In partition " + pid +
+      ", (sumCalculationTime) Time for executing from GPU env: "
+      + (endTime2 - startTime2))
+    // scalastyle:on println
+
+     */
+
+    logInfo("In partition " + pid +
+      ", (sumSearchingTime) Time for getting graph info from spark: " + sumSearchingTime)
+    logInfo("In partition " + pid +
+      ", (sumWritingTime) Time for writing into arr: " + sumWritingTime)
+    logInfo("In partition " + pid +
+      ", (sumCalculationTime) Time for executing from GPU env: "
+      + (endTime2 - startTime2))
+
     Iterator((pid, (needMerge, activeCount)))
   }
 
+  /**
+   * Get related partition messages in the GPU environment defined in gpuFetchFunc
+   *
+   * @param pid for the partition ID
+   * @param gpuFetchFunc which get the messages in GPU using related vertices
+   *
+   * @return iterator aggregated messages keyed by the receiving vertex id
+   */
   def aggregateIntoGPUSkipFetch[A: ClassTag]
   (pid: Int,
    gpuFetchFunc: Int
      => (Array[VertexId], Array[A])): Iterator[(VertexId, A)] = {
+
+    val startTime2 = System.nanoTime()
 
     val bitSet = new BitSet(vertexAttrs.length)
     val (globalVidResult, globalAggResult) = gpuFetchFunc(pid)
@@ -900,14 +1063,40 @@ class EdgePartition[
       sortedAggregates(locals) = globalAggResult(j)
     }
 
+    val endTime2 = System.nanoTime()
+    /*
+    // scalastyle:off println
+    println("In partition " + pid +
+      ", (sumFetchingTime) Time for getting messages from GPU env: "
+      + (endTime2 - startTime2))
+    // scalastyle:on println
+
+     */
+
+    logInfo("In partition " + pid +
+      ", (sumFetchingTime) Time for getting messages from GPU env: "
+      + (endTime2 - startTime2))
+
     bitSet.iterator.map { localId => (local2global(localId), sortedAggregates(localId)) }
   }
 
+
+  /**
+   * Get related partition messages in the GPU environment defined in gpuFetchFunc
+   * Will get merged messages in the last several iteration
+   *
+   * @param pid for the partition ID
+   * @param gpuFetchFunc which get the messages in GPU using related vertices
+   *
+   * @return iterator aggregated messages keyed by the receiving vertex id
+   */
   def aggregateIntoGPUSkipFetchOldMsg[A: ClassTag]
   (pid: Int,
    gpuFetchFunc: Int
      => (Array[VertexId], Array[Boolean], Array[Int], Array[A])):
   Iterator[(VertexId, (Boolean, Int, A))] = {
+
+    val startTime2 = System.nanoTime()
 
     val bitSet = new BitSet(vertexAttrs.length)
     val (globalVidResult, lastActiveResult, timeStampResult, globalAggResult) = gpuFetchFunc(pid)
@@ -922,23 +1111,69 @@ class EdgePartition[
       sortedAggregates(locals) = globalAggResult(j)
     }
 
+    val endTime2 = System.nanoTime()
+    /*
+    // scalastyle:off println
+    println("In partition " + pid +
+      ", (sumFetchingTime) Time for getting oldmessages from GPU env: "
+      + (endTime2 - startTime2))
+    // scalastyle:on println
+
+     */
+
+    logInfo("In partition " + pid +
+      ", (sumFetchingTime) Time for getting oldmessages from GPU env: "
+      + (endTime2 - startTime2))
+
     bitSet.iterator.map { localId => (local2global(localId),
       (lastActiveResult(localId), timeStampResult(localId), sortedAggregates(localId))) }
   }
 
+
+  /**
+   * Using the existed related vertices in GPU environment to generate messages.
+   * Used in step skipping only if some condition satisfied.
+   *
+   * @param pid for the partition ID
+   * @param iterTimes for the previous iteration of Pregel
+   * @param gpuBridgeFunc which execute the message generate function in GPU using related vertices
+   *
+   * @return partition status if could execute step skipping
+   *         and active vertices number in partition scope
+   */
   def aggregateIntoGPUSkipStep
   (pid: Int, iterTimes: Int,
    gpuBridgeFunc: (Int, Int) => (Boolean, Int)): Iterator[(Int, (Boolean, Int))] = {
 
+    val startTime2 = System.nanoTime()
+
     val (needMerge, activeCount) = gpuBridgeFunc(pid, iterTimes)
+
+    val endTime2 = System.nanoTime()
+    /*
+    // scalastyle:off println
+    println("In partition " + pid +
+      ", (sumCalculationTime) Time for skipping from GPU env: "
+      + (endTime2 - startTime2))
+    // scalastyle:on println
+
+     */
+
+    logInfo("In partition " + pid +
+      ", (sumCalculationTime) Time for skipping from GPU env: "
+      + (endTime2 - startTime2))
+
     Iterator((pid, (needMerge, activeCount)))
   }
 
   // GPU shm init with incomplete skip
   /**
-   * Send nothing along edges and aggregate them at the receiving vertices. Implemented by scanning
-   * all edges sequentially.
+   * Send messages along edges and aggregate them at the receiving vertices. Implemented by scanning
+   * all edges sequentially, then copy the related vertices into GPU environment in shm form.
    *
+   * @param pid for the partition ID
+   * @param counter for skipping steps, will be removed in the future
+   * @param gpuBridgeFunc which execute the message generate function in GPU using related vertices
    * @param tripletFields which triplet fields `sendMsg` uses
    * @param activeness criteria for filtering edges based on activeness
    *
@@ -962,6 +1197,7 @@ class EdgePartition[
 
     var i = 0
     while (i < size) {
+
       val startTime = System.nanoTime()
 
       val localSrcId = localSrcIds(i)
@@ -980,7 +1216,9 @@ class EdgePartition[
       sumSearchingTime += (endTime - startTime)
 
       if (edgeIsActive) {
+
         val startTime2 = System.nanoTime()
+
         val srcAttr = if (tripletFields.useSrc) vertexAttrs(localSrcId) else null.asInstanceOf[VD]
         val dstAttr = if (tripletFields.useDst) vertexAttrs(localDstId) else null.asInstanceOf[VD]
 
@@ -1021,6 +1259,7 @@ class EdgePartition[
 
     val endTime2 = System.nanoTime()
 
+    /*
     // scalastyle:off println
     println("In partition " + pid +
       ", (sumSearchingTime) Time for getting graph info from spark: " + sumSearchingTime)
@@ -1030,6 +1269,8 @@ class EdgePartition[
       ", (sumCalculationTime) Time for executing and packaging from GPU env: "
       + (endTime2 - startTime2))
     // scalastyle:on println
+
+     */
 
     logInfo("In partition " + pid +
       ", (sumSearchingTime) Time for getting graph info from spark: " + sumSearchingTime)
@@ -1057,10 +1298,14 @@ class EdgePartition[
   }
 
   /**
-   * Send nothing along edges and aggregate them at the receiving vertices. Implemented by
-   * filtering the source vertex index, then scanning each edge cluster.
+   * Send messages along edges and aggregate them at the receiving vertices. Implemented by
+   * filtering the source vertex index, then scanning each edge cluster, then
+   * copy the related vertices into GPU environment in shm form.
    *
-   * @param tripletFields which triplet fields uses
+   * @param pid for the partition ID
+   * @param counter for skipping steps, will be removed in the future
+   * @param gpuBridgeFunc which execute the message generate function in GPU using related vertices
+   * @param tripletFields which triplet fields `sendMsg` uses
    * @param activeness criteria for filtering edges based on activeness
    *
    * @return iterator aggregated messages keyed by the receiving vertex id
@@ -1082,6 +1327,7 @@ class EdgePartition[
     val filterBitSet = new BitSet(vertexAttrs.length)
 
     index.iterator.foreach { cluster =>
+
       val startTime = System.nanoTime()
 
       val clusterSrcId = cluster._1
@@ -1100,7 +1346,9 @@ class EdgePartition[
       sumSearchingTime += (endTime - startTime)
 
       if (scanCluster) {
+
         val startTime2 = System.nanoTime()
+
         var pos = clusterPos
         val srcAttr =
           if (tripletFields.useSrc) vertexAttrs(clusterLocalSrcId) else null.asInstanceOf[VD]
@@ -1109,11 +1357,14 @@ class EdgePartition[
           writerLineTest.input(clusterSrcId, isActive(clusterSrcId), srcAttr)
           filterBitSet.set(clusterLocalSrcId)
         }
+
         val endTime2 = System.nanoTime()
         sumWritingTime += (endTime2 - startTime2)
 
         while (pos < size && localSrcIds(pos) == clusterLocalSrcId) {
+
           val startTime3 = System.nanoTime()
+
           val localDstId = localDstIds(pos)
           val dstId = local2global(localDstId)
           val edgeIsActive =
@@ -1123,10 +1374,14 @@ class EdgePartition[
             else if (activeness == EdgeActiveness.Both) isActive(dstId)
             else if (activeness == EdgeActiveness.Either) isActive(clusterSrcId) || isActive(dstId)
             else throw new Exception("unreachable")
+
           val endTime3 = System.nanoTime()
           sumSearchingTime += (endTime3 - startTime3)
+
           if (edgeIsActive) {
+
             val startTime4 = System.nanoTime()
+
             val dstAttr =
               if (tripletFields.useDst) vertexAttrs(localDstId) else null.asInstanceOf[VD]
 
@@ -1134,13 +1389,16 @@ class EdgePartition[
               writerLineTest.input(dstId, isActive(dstId), dstAttr)
               filterBitSet.set(localDstId)
             }
+
             val endTime4 = System.nanoTime()
             sumWritingTime += (endTime4 - startTime4)
+
           }
           pos += 1
         }
       }
     }
+
     val startTime2 = System.nanoTime()
 
     // Input array is a linear shm-like array
@@ -1155,6 +1413,7 @@ class EdgePartition[
 
     val endTime2 = System.nanoTime()
 
+    /*
     // scalastyle:off println
     println("In partition " + pid +
       ", (sumSearchingTime) Time for getting graph info from spark: " + sumSearchingTime)
@@ -1164,6 +1423,8 @@ class EdgePartition[
       ", (sumCalculationTime) Time for executing and packaging from GPU env: "
       + (endTime2 - startTime2))
     // scalastyle:on println
+
+     */
 
     logInfo("In partition " + pid +
       ", (sumSearchingTime) Time for getting graph info from spark: " + sumSearchingTime)
@@ -1190,6 +1451,18 @@ class EdgePartition[
     resultBitSet.iterator.map { localId => (local2global(localId), resultSortedAgg(localId)) }
   }
 
+  /**
+   * Using the existed related vertices in GPU environment to generate messages.
+   * Used in step skipping only if some condition satisfied.
+   * Will be removed.
+   *
+   * @param pid for the partition ID
+   * @param counter for sending whether this partition could skip or not
+   * @param gpuBridgeFunc which execute the message generate function in GPU using related vertices
+   *
+   * @return partition status if could execute step skipping
+   *         and active vertices number in partition scope
+   */
   def aggregateIntoGPUSkipStepInShm[A: ClassTag]
   (pid: Int, counter: LongAccumulator,
    gpuBridgeFunc: (Int, GraphXPrimitiveKeyOpenHashMap[VertexId, Int])
@@ -1204,11 +1477,15 @@ class EdgePartition[
     }
 
     val endTime2 = System.nanoTime()
+
+    /*
     // scalastyle:off println
     println("In skipped partition " + pid +
       ", (sumCalculationTime) Time for executing and packaging from GPU env: "
       + (endTime2 - startTime2))
     // scalastyle:on println
+
+     */
 
     logInfo("In skipped partition " + pid +
       ", (sumCalculationTime) Time for executing and packaging from GPU env: "
@@ -1217,6 +1494,17 @@ class EdgePartition[
     resultBitSet.iterator.map { localId => (local2global(localId), resultSortedAgg(localId)) }
   }
 
+  /**
+   * Using the existed related vertices in GPU environment to get messages.
+   * Used in step skipping only if last iteration is skipped.
+   * Will be removed.
+   *
+   * @param pid for the partition ID
+   * @param gpuBridgeFunc which execute the message generate function in GPU using related vertices
+   *
+   * @return partition status if could execute step skipping
+   *         and active vertices number in partition scope
+   */
   def aggregateIntoGPUFinalCollectInShm[A: ClassTag]
   (pid: Int,
    gpuBridgeFunc: (Int, GraphXPrimitiveKeyOpenHashMap[VertexId, Int])
@@ -1228,10 +1516,13 @@ class EdgePartition[
 
     val endTime2 = System.nanoTime()
 
+    /*
     // scalastyle:off println
-    logInfo("In final partition " + pid +
+    println("In final partition " + pid +
       ", Time for executing and packaging from GPU env: " + (endTime2 - startTime2))
     // scalastyle:on println
+
+     */
 
     logInfo("In final partition " + pid +
       ", Time for executing and packaging from GPU env: " + (endTime2 - startTime2))

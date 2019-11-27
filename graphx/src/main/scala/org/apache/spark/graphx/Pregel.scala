@@ -162,8 +162,8 @@ object Pregel extends Logging {
     while (activeMessages > 0 && i < maxIterations) {
       // Receive the messages and update the vertices.
 
-      logInfo("Pregel finished iteration " + i)
-      println("Pregel finished iteration " + i)
+      logInfo("Pregel start iteration " + i)
+      println("Pregel start iteration " + i)
 
       val startTimeIter = System.nanoTime()
       prevG = g

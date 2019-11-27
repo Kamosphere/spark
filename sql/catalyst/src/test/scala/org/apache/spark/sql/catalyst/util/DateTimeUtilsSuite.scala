@@ -21,6 +21,8 @@ import java.sql.{Date, Timestamp}
 import java.text.SimpleDateFormat
 import java.util.{Calendar, Locale, TimeZone}
 
+import org.apache.commons.lang3.time.FastDateFormat
+
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.catalyst.util.DateTimeUtils._
 import org.apache.spark.unsafe.types.UTF8String
@@ -690,6 +692,83 @@ class DateTimeUtilsSuite extends SparkFunSuite {
             s"Round trip of ${d} did not work in tz ${tz}")
         }
       }
+    }
+  }
+
+  test("parsing timestamp strings up to microsecond precision") {
+    DateTimeTestUtils.outstandingTimezones.foreach { timeZone =>
+      def check(pattern: String, input: String, reference: String): Unit = {
+        val parser = new TimestampParser(FastDateFormat.getInstance(pattern, timeZone, Locale.US))
+        val expected = DateTimeUtils.stringToTimestamp(
+          UTF8String.fromString(reference), timeZone).get
+        val actual = parser.parse(input)
+        assert(actual === expected)
+      }
+
+      check("yyyy-MM-dd'T'HH:mm:ss.SSSSSSSXXX",
+        "2019-10-14T09:39:07.3220000Z", "2019-10-14T09:39:07.322Z")
+      check("yyyy-MM-dd'T'HH:mm:ss.SSSSSS",
+        "2019-10-14T09:39:07.322000", "2019-10-14T09:39:07.322")
+      check("yyyy-MM-dd'T'HH:mm:ss.SSSX",
+        "2019-10-14T09:39:07.322Z", "2019-10-14T09:39:07.322Z")
+      check("yyyy-MM-dd'T'HH:mm:ss.SSSSSSX",
+        "2019-10-14T09:39:07.123456Z", "2019-10-14T09:39:07.123456Z")
+      check("yyyy-MM-dd'T'HH:mm:ss.SSSSSSX",
+        "2019-10-14T09:39:07.000010Z", "2019-10-14T09:39:07.00001Z")
+      check("yyyy-MM-dd'T'HH:mm:ss.S",
+        "2019-10-14T09:39:07.1", "2019-10-14T09:39:07.1")
+      check("yyyy-MM-dd'T'HH:mm:ss.SS",
+        "2019-10-14T09:39:07.10", "2019-10-14T09:39:07.1")
+
+      try {
+        new TimestampParser(
+          FastDateFormat.getInstance("yyyy/MM/dd HH_mm_ss.SSSSSS", timeZone, Locale.US))
+          .parse("2019/11/14 20#25#30.123456")
+        fail("Expected to throw an exception for the invalid input")
+      } catch {
+        case e: IllegalArgumentException =>
+          assert(e.getMessage.contains("is an invalid timestamp"))
+      }
+    }
+  }
+
+  test("formatting timestamp strings up to microsecond precision") {
+    DateTimeTestUtils.outstandingTimezones.foreach { timeZone =>
+      def check(pattern: String, input: String, expected: String): Unit = {
+        val parser = new TimestampParser(FastDateFormat.getInstance(pattern, timeZone, Locale.US))
+        val timestamp = DateTimeUtils.stringToTimestamp(
+          UTF8String.fromString(input), timeZone).get
+        val actual = parser.format(timestamp)
+        assert(actual === expected)
+      }
+
+      check(
+        "yyyy-MM-dd HH:mm:ss.SSSSSSS", "2019-10-14T09:39:07.123456",
+        "2019-10-14 09:39:07.1234560")
+      check(
+        "yyyy-MM-dd HH:mm:ss.SSSSSS", "1960-01-01T09:39:07.123456",
+        "1960-01-01 09:39:07.123456")
+      check(
+        "yyyy-MM-dd HH:mm:ss.SSSSS", "0001-10-14T09:39:07.1",
+        "0001-10-14 09:39:07.10000")
+      check(
+        "yyyy-MM-dd HH:mm:ss.SSSS", "9999-12-31T23:59:59.999",
+        "9999-12-31 23:59:59.9990")
+      check(
+        "yyyy-MM-dd HH:mm:ss.SSS", "1970-01-01T00:00:00.0101",
+        "1970-01-01 00:00:00.010")
+      check(
+        "yyyy-MM-dd HH:mm:ss.SS", "2019-10-14T09:39:07.09",
+        "2019-10-14 09:39:07.09")
+      check(
+        "yyyy-MM-dd HH:mm:ss.S", "2019-10-14T09:39:07.2",
+        "2019-10-14 09:39:07.2")
+      check(
+        "yyyy-MM-dd HH:mm:ss.S", "2019-10-14T09:39:07",
+        "2019-10-14 09:39:07.0")
+      check(
+        "yyyy-MM-dd HH:mm:ss", "2019-10-14T09:39:07.123456",
+        "2019-10-14 09:39:07")
     }
   }
 }

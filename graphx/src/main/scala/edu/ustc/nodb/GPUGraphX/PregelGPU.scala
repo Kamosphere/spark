@@ -96,23 +96,6 @@ object PregelGPU extends Logging{
       ", next iter active node amount: " + activeMessages)
     println("-------------------------")
 
-    /*
-    messages.foreachPartition(iter => {
-      val pid = TaskContext.getPartitionId()
-      var temp : (VertexId, A)  = null
-      val writer = new PrintWriter(new File("/home/liqi/IdeaProjects/GraphXwithGPU/logGPU/" +
-        "testGPUMessagesLog_pid" + pid + "_iter" + 0 + ".txt"))
-      while(iter.hasNext){
-        temp = iter.next()
-        var chars = ""
-        chars = chars + " " + temp._1 + " : " + temp._2
-        writer.write("In iter " + 0 + " of part " + pid + " , init message data: "
-          + chars + '\n')
-      }
-      writer.close()
-    })
-    */
-
     var afterCounter = ifFilteredCounter.value
 
     var prevG : Graph[VD, ED] = null
@@ -156,61 +139,6 @@ object PregelGPU extends Logging{
             iterTimes, countOutDegree, ifFilteredCounter)
         })
       }
-
-      /*
-      oldMessages.foreachPartition(iter => {
-        val pid = TaskContext.getPartitionId()
-        var temp : (VertexId, A)  = null
-        val writer = new PrintWriter(new File("/home/liqi/IdeaProjects/GraphXwithGPU/logGPU/" +
-          "testGPUOldMessagesLog_pid" + pid + "_iter" + iterTimes + ".txt"))
-        while(iter.hasNext){
-          temp = iter.next()
-          var chars = ""
-          chars = chars + " " + temp._1 + " : " + temp._2
-          writer.write("In iter " + iterTimes + " of part " + pid + " , message data: "
-            + chars + '\n')
-        }
-        writer.close()
-      })
-      */
-      /*
-      g.triplets.foreachPartition(iter => {
-        val pid = TaskContext.getPartitionId()
-        var temp : EdgeTriplet[VD, ED]  = null
-
-        val writer = new PrintWriter(new File("/home/liqi/IdeaProjects/GraphXwithGPU/logGPU/" +
-            "testGPUEdgeLog_pid" + pid + "_iter" + iterTimes + ".txt"))
-        while(iter.hasNext){
-          temp = iter.next()
-          var chars = ""
-          chars = chars + " " + temp.srcId + " : " + temp.srcAttr
-          chars = chars + " -> " + temp.dstId + " : " + temp.dstAttr
-          chars = chars + " Edge attr: " + temp.attr
-          writer.write("In iter " + iterTimes + " of part" + pid + " , edge data: "
-            + chars + '\n')
-
-        }
-        writer.close()
-
-      })
-
-      println("*----------------------------------------------*")
-      g.vertices.foreachPartition(iter => {
-        val pid = TaskContext.getPartitionId()
-        var temp : (VertexId, VD)  = null
-        val writer = new PrintWriter(new File("/home/liqi/IdeaProjects/GraphXwithGPU/logGPU/" +
-          "testGPUVertexLog_pid" + pid + "_iter" + iterTimes + ".txt"))
-        while(iter.hasNext){
-          temp = iter.next()
-          var chars = ""
-          chars = chars + " " + temp._1 + " : " + temp._2
-          writer.write("In iter " + iterTimes + " of part " + pid + " , vertex data: "
-            + chars + '\n')
-        }
-        writer.close()
-      })
-      println("*----------------------------------------------*")
-      */
 
       logInfo("In iteration " + iterTimes + ", beforeCounter is " + beforeCounter
         + ", afterCounter is " + afterCounter)

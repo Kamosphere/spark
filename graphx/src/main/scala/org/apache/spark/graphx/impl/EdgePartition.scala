@@ -809,7 +809,6 @@ class EdgePartition[
    * @return partition status if could execute step skipping
    *         and active vertices number in partition scope
    */
-  // GPU array init with complete skip
   def aggregateIntoGPUSkipEdgeScan
   (pid: Int,
    gpuBridgeFunc: (Int, Array[VertexId], Array[Boolean], Array[VD])
@@ -1448,85 +1447,6 @@ class EdgePartition[
     }
     writer.close()
 */
-    resultBitSet.iterator.map { localId => (local2global(localId), resultSortedAgg(localId)) }
-  }
-
-  /**
-   * Using the existed related vertices in GPU environment to generate messages.
-   * Used in step skipping only if some condition satisfied.
-   * Will be removed.
-   *
-   * @param pid for the partition ID
-   * @param counter for sending whether this partition could skip or not
-   * @param gpuBridgeFunc which execute the message generate function in GPU using related vertices
-   *
-   * @return partition status if could execute step skipping
-   *         and active vertices number in partition scope
-   */
-  def aggregateIntoGPUSkipStepInShm[A: ClassTag]
-  (pid: Int, counter: LongAccumulator,
-   gpuBridgeFunc: (Int, GraphXPrimitiveKeyOpenHashMap[VertexId, Int])
-     => (BitSet, Array[A], Boolean)): Iterator[(VertexId, A)] = {
-
-    val startTime2 = System.nanoTime()
-
-    val (resultBitSet, resultSortedAgg, needCombine) = gpuBridgeFunc(pid, global2local)
-
-    if(needCombine) {
-      counter.add(1)
-    }
-
-    val endTime2 = System.nanoTime()
-
-    /*
-    // scalastyle:off println
-    println("In skipped partition " + pid +
-      ", (sumCalculationTime) Time for executing and packaging from GPU env: "
-      + (endTime2 - startTime2))
-    // scalastyle:on println
-
-     */
-
-    logInfo("In skipped partition " + pid +
-      ", (sumCalculationTime) Time for executing and packaging from GPU env: "
-      + (endTime2 - startTime2))
-
-    resultBitSet.iterator.map { localId => (local2global(localId), resultSortedAgg(localId)) }
-  }
-
-  /**
-   * Using the existed related vertices in GPU environment to get messages.
-   * Used in step skipping only if last iteration is skipped.
-   * Will be removed.
-   *
-   * @param pid for the partition ID
-   * @param gpuBridgeFunc which execute the message generate function in GPU using related vertices
-   *
-   * @return partition status if could execute step skipping
-   *         and active vertices number in partition scope
-   */
-  def aggregateIntoGPUFinalCollectInShm[A: ClassTag]
-  (pid: Int,
-   gpuBridgeFunc: (Int, GraphXPrimitiveKeyOpenHashMap[VertexId, Int])
-     => (BitSet, Array[A], Boolean)): Iterator[(VertexId, A)] = {
-
-    val startTime2 = System.nanoTime()
-
-    val (resultBitSet, resultSortedAgg, needCombine) = gpuBridgeFunc(pid, global2local)
-
-    val endTime2 = System.nanoTime()
-
-    /*
-    // scalastyle:off println
-    println("In final partition " + pid +
-      ", Time for executing and packaging from GPU env: " + (endTime2 - startTime2))
-    // scalastyle:on println
-
-     */
-
-    logInfo("In final partition " + pid +
-      ", Time for executing and packaging from GPU env: " + (endTime2 - startTime2))
-
     resultBitSet.iterator.map { localId => (local2global(localId), resultSortedAgg(localId)) }
   }
 }

@@ -138,24 +138,6 @@ object GraphXUtils {
       TripletFields.All, activeSetOpt)
   }
 
-  def mapReduceTripletsIntoGPU_SkippingInShm[VD: ClassTag, ED: ClassTag, A: ClassTag]
-  (g: Graph[VD, ED], counter: LongAccumulator,
-   gpuBridgeFunc: (Int, GraphXPrimitiveKeyOpenHashMap[VertexId, Int])
-     => (BitSet, Array[A], Boolean),
-   globalReduceFunc: (A, A) => A):
-  VertexRDD[A] = {
-    g.aggregateIntoGPUSkippingInShm(counter, gpuBridgeFunc, globalReduceFunc)
-  }
-
-  def mapReduceTripletsIntoGPU_FinalCollectInShm[VD: ClassTag, ED: ClassTag, A: ClassTag]
-  (g: Graph[VD, ED],
-   gpuBridgeFunc: (Int, GraphXPrimitiveKeyOpenHashMap[VertexId, Int])
-     => (BitSet, Array[A], Boolean),
-   globalReduceFunc: (A, A) => A):
-  VertexRDD[A] = {
-    g.aggregateIntoGPUFinalCollectInShm(gpuBridgeFunc, globalReduceFunc)
-  }
-
   def innerPartitionVertexEdgeCount[VD: ClassTag, ED: ClassTag]
   (g: Graph[VD, ED]): collection.Map[Int, (Int, Int)] = {
     g.innerVerticesEdgesCount().collectAsMap()

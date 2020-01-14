@@ -569,63 +569,6 @@ class GraphImpl[VD: ClassTag, ED: ClassTag] protected (
     vertices.aggregateUsingIndex(preAgg, globalReduceFunc)
   }
 
-  override def aggregateIntoGPUSkippingInShm[A: ClassTag]
-  (counter: LongAccumulator,
-   gpuBridgeFunc: (Int, GraphXPrimitiveKeyOpenHashMap[VertexId, Int])
-     => (BitSet, Array[A], Boolean),
-   globalReduceFunc: (A, A) => A): VertexRDD[A] = {
-
-    val view = replicatedVertexView
-
-    // Map and combine.
-    val preAgg = view.edges.partitionsRDD.mapPartitions(_.flatMap {
-      case (pid, edgePartition) =>
-        var iterResult : Iterator[(VertexId, A)] = null
-        val startTime = System.nanoTime()
-        // Choose scan method
-        iterResult = edgePartition.aggregateIntoGPUSkipStepInShm(pid, counter, gpuBridgeFunc)
-        val endTime = System.nanoTime()
-        // scalastyle:off println
-        logInfo("In part " + pid + ", in skipping time: "
-          + (endTime - startTime) )
-        println("In part " + pid + ", in skipping time: "
-          + (endTime - startTime) )
-        // scalastyle:on println
-        iterResult
-    }).setName("GraphImpl.aggregateInGPUSkippingInShm - preAgg")
-
-    // do the final reduction reusing the index map
-    vertices.aggregateUsingIndex(preAgg, globalReduceFunc)
-  }
-
-  override def aggregateIntoGPUFinalCollectInShm[A: ClassTag]
-  (gpuBridgeFunc: (Int, GraphXPrimitiveKeyOpenHashMap[VertexId, Int])
-    => (BitSet, Array[A], Boolean),
-   globalReduceFunc: (A, A) => A): VertexRDD[A] = {
-
-    val view = replicatedVertexView
-
-    // Map and combine.
-    val preAgg = view.edges.partitionsRDD.mapPartitions(_.flatMap {
-      case (pid, edgePartition) =>
-        var iterResult : Iterator[(VertexId, A)] = null
-        val startTime = System.nanoTime()
-        // Choose scan method
-        iterResult = edgePartition.aggregateIntoGPUFinalCollectInShm(pid, gpuBridgeFunc)
-        val endTime = System.nanoTime()
-        // scalastyle:off println
-        logInfo("In part " + pid + ", in final collect time: "
-          + (endTime - startTime) )
-        println("In part " + pid + ", in final collect time: "
-          + (endTime - startTime) )
-        // scalastyle:on println
-        iterResult
-    }).setName("GraphImpl.aggregateInGPUFinalInShm - preAgg")
-
-    // do the final reduction reusing the index map
-    vertices.aggregateUsingIndex(preAgg, globalReduceFunc)
-  }
-
   override def innerVerticesEdgesCount(): RDD[(PartitionID, (Int, Int))] = {
     replicatedVertexView.edges.partitionsRDD.mapPartitions(_.map{
       case (pid, edgePartition) =>

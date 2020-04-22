@@ -222,6 +222,9 @@ object SparkBuild extends PomBuild {
 
     // Override SBT's default resolvers:
     resolvers := Seq(
+      // Google Mirror of Maven Central, placed first so that it's used instead of flaky Maven Central.
+      // See https://storage-download.googleapis.com/maven-central/index.html for more info.
+      "gcs-maven-central-mirror" at "https://maven-central.storage-download.googleapis.com/maven2/",
       DefaultMavenRepository,
       Resolver.mavenLocal,
       Resolver.file("local", file(Path.userHome.absolutePath + "/.ivy2/local"))(Resolver.ivyStylePatterns)
@@ -549,7 +552,8 @@ object DockerIntegrationTests {
 object DependencyOverrides {
   lazy val settings = Seq(
     dependencyOverrides += "com.google.guava" % "guava" % "14.0.1",
-    dependencyOverrides += "com.fasterxml.jackson.core"  % "jackson-databind" % "2.6.7.1",
+    dependencyOverrides += "commons-io" % "commons-io" % "2.4",
+    dependencyOverrides += "com.fasterxml.jackson.core"  % "jackson-databind" % "2.6.7.3",
     dependencyOverrides += "jline" % "jline" % "2.14.6")
 }
 

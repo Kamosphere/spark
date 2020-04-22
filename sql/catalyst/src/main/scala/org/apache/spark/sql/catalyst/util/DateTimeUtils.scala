@@ -1019,15 +1019,15 @@ object DateTimeUtils {
       case TRUNC_TO_DAY =>
         val offset = timeZone.getOffset(millis)
         millis += offset
-        millis - millis % (MILLIS_PER_SECOND * SECONDS_PER_DAY) - offset
+        millis - Math.floorMod(millis, MILLIS_PER_SECOND * SECONDS_PER_DAY) - offset
       case TRUNC_TO_HOUR =>
         val offset = timeZone.getOffset(millis)
         millis += offset
-        millis - millis % (60 * 60 * MILLIS_PER_SECOND) - offset
+        millis - Math.floorMod(millis, 60 * 60 * MILLIS_PER_SECOND) - offset
       case TRUNC_TO_MINUTE =>
-        millis - millis % (60 * MILLIS_PER_SECOND)
+        millis - Math.floorMod(millis, 60 * MILLIS_PER_SECOND)
       case TRUNC_TO_SECOND =>
-        millis - millis % MILLIS_PER_SECOND
+        millis - Math.floorMod(millis, MILLIS_PER_SECOND)
       case TRUNC_TO_WEEK =>
         val dDays = millisToDays(millis, timeZone)
         val prevMonday = getNextDateForDayOfWeek(dDays - 7, MONDAY)

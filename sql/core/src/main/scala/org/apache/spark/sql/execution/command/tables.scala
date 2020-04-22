@@ -21,12 +21,13 @@ import java.io.File
 import java.net.{URI, URISyntaxException}
 import java.nio.file.FileSystems
 
+import scala.collection.JavaConverters._
 import scala.collection.mutable.ArrayBuffer
 import scala.util.Try
 import scala.util.control.NonFatal
 
 import org.apache.hadoop.fs.{FileContext, FsConstants, Path}
-import org.apache.hadoop.fs.permission.{AclEntry, FsPermission}
+import org.apache.hadoop.fs.permission.{AclEntry, AclEntryScope, AclEntryType, FsAction, FsPermission}
 
 import org.apache.spark.sql.{AnalysisException, Row, SparkSession}
 import org.apache.spark.sql.catalyst.TableIdentifier
@@ -160,11 +161,7 @@ case class AlterTableRenameCommand(
       // this can happen with Hive tables when the underlying catalog is in-memory.
       val wasCached = Try(sparkSession.catalog.isCached(oldName.unquotedString)).getOrElse(false)
       if (wasCached) {
-        try {
-          sparkSession.catalog.uncacheTable(oldName.unquotedString)
-        } catch {
-          case NonFatal(e) => log.warn(e.toString, e)
-        }
+        CommandUtils.uncacheTableOrView(sparkSession, oldName.unquotedString)
       }
       // Invalidate the table last, otherwise uncaching the table would load the logical plan
       // back into the hive metastore cache
@@ -194,12 +191,7 @@ case class AlterTableAddColumnsCommand(
     val catalog = sparkSession.sessionState.catalog
     val catalogTable = verifyAlterTableAddColumn(sparkSession.sessionState.conf, catalog, table)
 
-    try {
-      sparkSession.catalog.uncacheTable(table.quotedString)
-    } catch {
-      case NonFatal(e) =>
-        log.warn(s"Exception when attempting to uncache table ${table.quotedString}", e)
-    }
+    CommandUtils.uncacheTableOrView(sparkSession, table.quotedString)
     catalog.refreshTable(table)
 
     SchemaUtils.checkColumnNameDuplication(
@@ -469,8 +461,8 @@ case class TruncateTableCommand(
           var optPermission: Option[FsPermission] = None
           var optAcls: Option[java.util.List[AclEntry]] = None
           if (!ignorePermissionAcl) {
-            val fileStatus = fs.getFileStatus(path)
             try {
+              val fileStatus = fs.getFileStatus(path)
               optPermission = Some(fileStatus.getPermission())
             } catch {
               case NonFatal(_) => // do nothing
@@ -500,12 +492,27 @@ case class TruncateTableCommand(
               }
             }
             optAcls.foreach { acls =>
+              val aclEntries = acls.asScala.filter(_.getName != null).asJava
+
+              // If the path doesn't have default ACLs, `setAcl` API will throw an error
+              // as it expects user/group/other permissions must be in ACL entries.
+              // So we need to add tradition user/group/other permission
+              // in the form of ACL.
+              optPermission.map { permission =>
+                aclEntries.add(newAclEntry(AclEntryScope.ACCESS,
+                  AclEntryType.USER, permission.getUserAction()))
+                aclEntries.add(newAclEntry(AclEntryScope.ACCESS,
+                  AclEntryType.GROUP, permission.getGroupAction()))
+                aclEntries.add(newAclEntry(AclEntryScope.ACCESS,
+                  AclEntryType.OTHER, permission.getOtherAction()))
+              }
+
               try {
-                fs.setAcl(path, acls)
+                fs.setAcl(path, aclEntries)
               } catch {
                 case NonFatal(e) =>
                   throw new SecurityException(
-                    s"Failed to set original ACL $acls back to " +
+                    s"Failed to set original ACL $aclEntries back to " +
                       s"the created path: $path. Exception: ${e.getMessage}")
               }
             }
@@ -535,6 +542,16 @@ case class TruncateTableCommand(
       catalog.alterTableStats(tableName, Some(newStats))
     }
     Seq.empty[Row]
+  }
+
+  private def newAclEntry(
+      scope: AclEntryScope,
+      aclType: AclEntryType,
+      permission: FsAction): AclEntry = {
+    new AclEntry.Builder()
+      .setScope(scope)
+      .setType(aclType)
+      .setPermission(permission).build()
   }
 }
 

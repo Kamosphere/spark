@@ -12,12 +12,13 @@ jobs:
   # Build: build Spark and run the tests for specified modules.
   build:
     name: "Build modules: ${{ matrix.modules }} ${{ matrix.comment }} (JDK ${{ matrix.java }}, ${{ matrix.hadoop }})"
-    runs-on: ubuntu-latest
+    # Ubuntu 20.04 is the latest LTS. The next LTS is 22.04.
+    runs-on: ubuntu-20.04
     strategy:
       fail-fast: false
       matrix:
         java:
-          - 1.8
+          - 8
         hadoop:
           - hadoop2.6
         # TODO(SPARK-32246): We don't test 'streaming-kinesis-asl' for now.
@@ -50,12 +51,12 @@ jobs:
         include:
           # Hive tests
           - modules: hive
-            java: 1.8
+            java: 8
             hadoop: hadoop2.6
             included-tags: org.apache.spark.tags.SlowHiveTest
             comment: "- slow tests"
           - modules: hive
-            java: 1.8
+            java: 8
             hadoop: hadoop2.6
             excluded-tags: org.apache.spark.tags.SlowHiveTest
             comment: "- other tests"
@@ -83,16 +84,10 @@ jobs:
           build/zinc-*
           build/scala-*
           build/*.jar
+          ~/.sbt
         key: build-${{ hashFiles('**/pom.xml', 'project/build.properties', 'build/mvn', 'build/sbt', 'build/sbt-launch-lib.bash', 'build/spark-build-info') }}
         restore-keys: |
           build-
-    - name: Cache Maven local repository
-      uses: actions/cache@v2
-      with:
-        path: ~/.m2/repository
-        key: ${{ matrix.java }}-${{ matrix.hadoop }}-maven-${{ hashFiles('**/pom.xml') }}
-        restore-keys: |
-          ${{ matrix.java }}-${{ matrix.hadoop }}-maven-
     - name: Cache Ivy local repository
       uses: actions/cache@v2
       with:
@@ -100,7 +95,7 @@ jobs:
         key: ${{ matrix.java }}-${{ matrix.hadoop }}-ivy-${{ hashFiles('**/pom.xml', '**/plugins.sbt') }}
         restore-keys: |
           ${{ matrix.java }}-${{ matrix.hadoop }}-ivy-
-    - name: Install JDK ${{ matrix.java }}
+    - name: Install Java ${{ matrix.java }}
       uses: actions/setup-java@v1
       with:
         java-version: ${{ matrix.java }}
@@ -122,25 +117,23 @@ jobs:
     - name: Install Python 2.7
       uses: actions/setup-python@v2
       # Yarn has a Python specific test too, for example, YarnClusterSuite.
-      if: contains(matrix.modules, 'yarn') || contains(matrix.modules, 'pyspark') || (contains(matrix.modules, 'sql') && !contains(matrix.modules, 'sql-'))
       with:
         python-version: 2.7
         architecture: x64
     - name: Install Python packages (Python 3.6 and PyPy3)
       if: contains(matrix.modules, 'pyspark')
       # PyArrow is not supported in PyPy yet, see ARROW-2651.
-      # TODO(SPARK-32247): scipy installation with PyPy fails for an unknown reason.
       run: |
-        python3.6 -m pip install numpy pyarrow pandas scipy xmlrunner
+        python3.6 -m pip install numpy 'pyarrow<0.12.0' 'pandas<0.24.0' scipy xmlrunner
         python3.6 -m pip list
-        # PyPy does not have xmlrunner
-        pypy3 -m pip install numpy pandas
+        # PyPy does not have xmlrunner, and pandas<0.24.0 installation fails in PyPy3, just skipping.
+        pypy3 -m pip install numpy scipy
         pypy3 -m pip list
     - name: Install Python packages (Python 2.7)
       if: contains(matrix.modules, 'pyspark') || (contains(matrix.modules, 'sql') && !contains(matrix.modules, 'sql-'))
       run: |
         # Some tests do not pass in PySpark with PyArrow, for example, pyspark.sql.tests.ArrowTests.
-        python2.7 -m pip install numpy pandas scipy xmlrunner
+        python2.7 -m pip install numpy 'pandas<0.24.0' scipy xmlrunner
         python2.7 -m pip list
     # SparkR
     - name: Install R 4.0
@@ -161,9 +154,7 @@ jobs:
       run: |
         # Hive tests become flaky when running in parallel as it's too intensive.
         if [[ "$MODULES_TO_TEST" == "hive" ]]; then export SERIAL_SBT_TESTS=1; fi
-        mkdir -p ~/.m2
         ./dev/run-tests --parallelism 2 --modules "$MODULES_TO_TEST" --included-tags "$INCLUDED_TAGS" --excluded-tags "$EXCLUDED_TAGS"
-        rm -rf ~/.m2/repository/org/apache/spark
     - name: Upload test results to report
       if: always()
       uses: actions/upload-artifact@v2
@@ -180,21 +171,41 @@ jobs:
   # Static analysis, and documentation build
   lint:
     name: Linters, licenses, dependencies and documentation generation
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     steps:
     - name: Checkout Spark repository
       uses: actions/checkout@v2
+    # Cache local repositories. Note that GitHub Actions cache has a 2G limit.
+    - name: Cache Scala, SBT, Maven and Zinc
+      uses: actions/cache@v2
+      with:
+        path: |
+          build/apache-maven-*
+          build/zinc-*
+          build/scala-*
+          build/*.jar
+          ~/.sbt
+        key: build-${{ hashFiles('**/pom.xml', 'project/build.properties', 'build/mvn', 'build/sbt', 'build/sbt-launch-lib.bash', 'build/spark-build-info') }}
+        restore-keys: |
+          build-
+    - name: Cache Ivy local repository
+      uses: actions/cache@v2
+      with:
+        path: ~/.ivy2/cache
+        key: docs-ivy-${{ hashFiles('**/pom.xml', '**/plugins.sbt') }}
+        restore-keys: |
+          docs-ivy-
     - name: Cache Maven local repository
       uses: actions/cache@v2
       with:
         path: ~/.m2/repository
-        key: docs-maven-repo-${{ hashFiles('**/pom.xml') }}
+        key: docs-maven-${{ hashFiles('**/pom.xml') }}
         restore-keys: |
           docs-maven-
-    - name: Install JDK 1.8
+    - name: Install Java 8
       uses: actions/setup-java@v1
       with:
-        java-version: 1.8
+        java-version: 8
     - name: Install Python 3.6
       uses: actions/setup-python@v2
       with:
@@ -209,7 +220,7 @@ jobs:
         r-version: 4.0
     - name: Install R linter dependencies and SparkR
       run: |
-        sudo apt-get install -y libcurl4-openssl-dev
+        sudo apt-get install -y libcurl4-openssl-dev libgit2-dev libssl-dev libxml2-dev
         sudo Rscript -e "install.packages(c('devtools'), repos='https://cloud.r-project.org/')"
         sudo Rscript -e "devtools::install_github('jimhester/lintr@v2.0.0')"
         ./R/install-dev.sh
